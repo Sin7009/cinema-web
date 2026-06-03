@@ -89,3 +89,51 @@ export async function searchTorrents(query: string): Promise<TorrentResult[]> {
     return [];
   }
 }
+
+export async function searchTorrentsMulti(
+  title: string,
+  originalTitle: string,
+  year: string | null
+): Promise<TorrentResult[]> {
+  const cleanTitle = title.trim();
+  const cleanOrigTitle = originalTitle ? originalTitle.trim() : "";
+  const cleanYear = year ? year.trim() : "";
+
+  // 1. Формируем поисковые запросы
+  const queries: string[] = [];
+  const q1 = cleanYear ? `${cleanTitle} ${cleanYear}` : cleanTitle;
+  queries.push(q1);
+
+  if (cleanOrigTitle && cleanOrigTitle.toLowerCase() !== cleanTitle.toLowerCase()) {
+    const q2 = cleanYear ? `${cleanOrigTitle} ${cleanYear}` : cleanOrigTitle;
+    queries.push(q2);
+  }
+
+  console.log(`[Jackett Multi Search] Queries: ${JSON.stringify(queries)}`);
+
+  // 2. Выполняем запросы параллельно
+  try {
+    const searchPromises = queries.map((q) => searchTorrents(q));
+    const allResultsArrays = await Promise.all(searchPromises);
+
+    // 3. Объединяем и дедуплицируем результаты
+    const mergedResults: TorrentResult[] = [];
+    const seenUrls = new Set<string>();
+
+    for (const results of allResultsArrays) {
+      for (const item of results) {
+        const key = item.magnetUrl || item.downloadUrl;
+        if (!seenUrls.has(key)) {
+          seenUrls.add(key);
+          mergedResults.push(item);
+        }
+      }
+    }
+
+    // Сортируем объединенные результаты по сидам
+    return mergedResults.sort((a, b) => b.seeders - a.seeders);
+  } catch (error) {
+    console.error("[Jackett Multi Search] Error:", error);
+    return [];
+  }
+}

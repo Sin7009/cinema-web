@@ -49,6 +49,40 @@ export async function addTorrent(link: string): Promise<TorrTorrent | null> {
   return data;
 }
 
+// Загрузить торрент в TorrServer как файл .torrent
+export async function uploadTorrent(fileBuffer: Buffer, title: string): Promise<TorrTorrent | null> {
+  try {
+    const formData = new FormData();
+    const fileBlob = new Blob([new Uint8Array(fileBuffer)], { type: "application/x-bittorrent" });
+    formData.append("file", fileBlob, `${title || "torrent"}.torrent`);
+    formData.append("save", "true");
+
+    const res = await fetch(`${TORRSERVER_API_URL}/torrent/upload`, {
+      method: "POST",
+      body: formData,
+      next: { revalidate: 0 },
+    });
+
+    if (!res.ok) {
+      console.error(`TorrServer upload error: ${res.statusText}`);
+      return null;
+    }
+
+    const data = await res.json();
+    
+    // В новых версиях API может возвращать массив объектов [{hash, title, ...}]
+    if (Array.isArray(data) && data.length > 0) {
+      return data[0];
+    }
+    
+    return data;
+  } catch (error) {
+    console.error("TorrServer upload fetch error:", error);
+    return null;
+  }
+}
+
+
 // Получить информацию о торренте (список файлов)
 export async function getTorrent(hash: string): Promise<TorrTorrent | null> {
   const data = await requestTorrServer("/torrents", {

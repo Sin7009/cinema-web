@@ -112,8 +112,13 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
       async function loadTorrents() {
         setLoadingTorrents(true);
         try {
-          const searchQuery = movieYear ? `${movieTitle} ${movieYear}` : movieTitle;
-          const res = await fetch(`/api/torrents/search?query=${encodeURIComponent(searchQuery)}`);
+          const origTitle = movie.original_title || movie.original_name || "";
+          const params = new URLSearchParams({
+            title: movieTitle,
+            originalTitle: origTitle,
+            year: movieYear ? String(movieYear) : "",
+          });
+          const res = await fetch(`/api/torrents/search?${params.toString()}`);
           if (res.ok) {
             const data = await res.json();
             setTorrents(data.results || []);
@@ -126,7 +131,40 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
       }
       loadTorrents();
     }
-  }, [movieTitle, movieYear, torrents.length]);
+  }, [movie, movieTitle, movieYear, torrents.length]);
+
+  // 2.2. Автоматический опрос TorrServer для получения списка файлов, если он изначально пуст
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout | undefined;
+
+    if (activeTab === "watch" && torrTorrent && (!torrTorrent.file_list || torrTorrent.file_list.length === 0)) {
+      const pollTorrentDetails = async () => {
+        try {
+          const res = await fetch(`/api/torrents/get?hash=${torrTorrent.hash}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.torrent && data.torrent.file_list && data.torrent.file_list.length > 0) {
+              console.log(`[TorrServer Polling Success] File list loaded: ${data.torrent.file_list.length} files`);
+              setTorrTorrent(data.torrent);
+              const files = data.torrent.file_list;
+              if (selectedFileId === null) {
+                setSelectedFileId(files[0].id); // Автовыбор первой серии/файла
+              }
+            }
+          }
+        } catch (e) {
+          console.error("Error polling torrent details:", e);
+        }
+      };
+
+      pollTorrentDetails();
+      intervalId = setInterval(pollTorrentDetails, 2000);
+    }
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [activeTab, torrTorrent, selectedFileId]);
 
   // 3. Отправка торрента в TorrServer
   const handleSelectTorrent = async (torrent: TorrentResult) => {
@@ -136,22 +174,17 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
       const res = await fetch("/api/torrents/add", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ link }),
+        body: JSON.stringify({ link, title: movieTitle }),
       });
 
       if (res.ok) {
         const data = await res.json();
         setTorrTorrent(data.torrent);
-        
-        // Если файлов несколько (сериал или диск), даем выбрать.
-        // Если один файл - автоматически выбираем его.
+        setActiveTab("watch"); // Всегда переключаемся во вкладку воспроизведения
+
         const files = data.torrent.file_list || [];
-        if (files.length === 1) {
-          setSelectedFileId(files[0].id);
-          setActiveTab("watch");
-        } else if (files.length > 1) {
-          // Сортируем файлы по размеру или имени
-          setActiveTab("watch");
+        if (files.length > 0) {
+          setSelectedFileId(files[0].id); // Выбираем первый файл по умолчанию
         }
       } else {
         alert("Не удалось добавить торрент в TorrServer");
@@ -500,162 +533,174 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
 
           {/* ТАБ 3: ВОСПРОИЗВЕДЕНИЕ */}
           {activeTab === "watch" && torrTorrent && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-              {/* Левая колонка: Видеоплеер */}
-              <div className="lg:col-span-2 space-y-4">
-                {selectedFileId !== null && (() => {
-                  const selectedFile = torrTorrent.file_list.find((f: any) => f.id === selectedFileId);
-                  const currentFileName = selectedFile ? selectedFile.path.split("/").pop() : "";
-                  return (
-                    <div className="space-y-4">
-                      {currentFileName && (
-                        <div className="bg-gray-900/40 border border-gray-800/80 px-4 py-2 rounded-md flex justify-between items-center">
-                          <span className="text-sm font-semibold text-gray-200 truncate pr-4" title={currentFileName}>
-                            🍿 Сейчас играет: <span className="text-white">{currentFileName}</span>
-                          </span>
-                          {loadingSkipTimes && (
-                            <span className="text-xs text-gray-500 flex items-center space-x-1 whitespace-nowrap">
-                              <span className="w-2.5 h-2.5 border-2 border-t-red-600 border-gray-800 rounded-full animate-spin inline-block mr-1"></span>
-                              Анализ таймингов...
+            (!torrTorrent.file_list || torrTorrent.file_list.length === 0) ? (
+              <div className="flex flex-col items-center justify-center p-12 bg-black/40 border border-gray-800 rounded-lg space-y-6">
+                <div className="w-12 h-12 border-4 border-t-red-600 border-gray-800 rounded-full animate-spin"></div>
+                <div className="text-center space-y-2">
+                  <span className="text-lg text-white font-semibold">Подключение к раздаче...</span>
+                  <p className="text-sm text-gray-400 max-w-md">
+                    TorrServer получает метаданные и список файлов торрента. Это может занять некоторое время.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                {/* Левая колонка: Видеоплеер */}
+                <div className="lg:col-span-2 space-y-4">
+                  {selectedFileId !== null && (() => {
+                    const selectedFile = torrTorrent.file_list.find((f: any) => f.id === selectedFileId);
+                    const currentFileName = selectedFile ? selectedFile.path.split("/").pop() : "";
+                    return (
+                      <div className="space-y-4">
+                        {currentFileName && (
+                          <div className="bg-gray-900/40 border border-gray-800/80 px-4 py-2 rounded-md flex justify-between items-center">
+                            <span className="text-sm font-semibold text-gray-200 truncate pr-4" title={currentFileName}>
+                              🍿 Сейчас играет: <span className="text-white">{currentFileName}</span>
                             </span>
-                          )}
-                          {!loadingSkipTimes && (skipTimes?.intro || skipTimes?.outro) && (
-                            <span className="text-xs text-green-500 font-bold bg-green-950/40 px-2 py-0.5 rounded border border-green-800/30 whitespace-nowrap">
-                              ✨ Автопропуск готов
-                            </span>
-                          )}
-                        </div>
-                      )}
+                            {loadingSkipTimes && (
+                              <span className="text-xs text-gray-500 flex items-center space-x-1 whitespace-nowrap">
+                                <span className="w-2.5 h-2.5 border-2 border-t-red-600 border-gray-800 rounded-full animate-spin inline-block mr-1"></span>
+                                Анализ таймингов...
+                              </span>
+                            )}
+                            {!loadingSkipTimes && (skipTimes?.intro || skipTimes?.outro) && (
+                              <span className="text-xs text-green-500 font-bold bg-green-950/40 px-2 py-0.5 rounded border border-green-800/30 whitespace-nowrap">
+                                ✨ Автопропуск готов
+                              </span>
+                            )}
+                          </div>
+                        )}
 
-                      {isPlaying ? (
-                        <div className="relative aspect-video w-full bg-black rounded-lg overflow-hidden border border-gray-800 group/player">
-                          <video
-                            ref={videoRef}
-                            src={getStreamLink()}
-                            controls
-                            autoPlay
-                            onLoadedMetadata={handleLoadedMetadata}
-                            onTimeUpdate={handleTimeUpdate}
-                            onEnded={handleVideoEnded}
-                            className="w-full h-full"
-                            style={{ outline: "none" }}
-                          />
+                        {isPlaying ? (
+                          <div className="relative aspect-video w-full bg-black rounded-lg overflow-hidden border border-gray-800 group/player">
+                            <video
+                              ref={videoRef}
+                              src={getStreamLink()}
+                              controls
+                              autoPlay
+                              onLoadedMetadata={handleLoadedMetadata}
+                              onTimeUpdate={handleTimeUpdate}
+                              onEnded={handleVideoEnded}
+                              className="w-full h-full"
+                              style={{ outline: "none" }}
+                            />
 
-                          {/* Интерактивный оверлей автопропуска с таймером отмены */}
-                          {skipOverlay.show && (
-                            <div className="absolute bottom-20 left-1/2 -translate-x-1/2 px-6 py-4 bg-black/90 border border-gray-800 rounded-lg shadow-2xl z-40 flex items-center space-x-6 animate-fade-in text-white text-sm whitespace-nowrap">
-                              <div className="flex items-center space-x-3">
-                                <div className="w-8 h-8 rounded-full border-2 border-red-600 flex items-center justify-center font-bold text-red-500 text-xs">
-                                  {skipOverlay.countdown}
+                            {/* Интерактивный оверлей автопропуска с таймером отмены */}
+                            {skipOverlay.show && (
+                              <div className="absolute bottom-20 left-1/2 -translate-x-1/2 px-6 py-4 bg-black/90 border border-gray-800 rounded-lg shadow-2xl z-40 flex items-center space-x-6 animate-fade-in text-white text-sm whitespace-nowrap">
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 rounded-full border-2 border-red-600 flex items-center justify-center font-bold text-red-500 text-xs">
+                                    {skipOverlay.countdown}
+                                  </div>
+                                  <span className="font-semibold text-gray-100">
+                                    {skipOverlay.type === "intro" 
+                                      ? "Пропускаем вступительную заставку..." 
+                                      : "Переходим к следующей серии..."}
+                                  </span>
                                 </div>
-                                <span className="font-semibold text-gray-100">
-                                  {skipOverlay.type === "intro" 
-                                    ? "Пропускаем вступительную заставку..." 
-                                    : "Переходим к следующей серии..."}
-                                </span>
+                                
+                                <button
+                                  onClick={() => {
+                                    if (skipOverlay.type) {
+                                      setCancelledSkips(prev => [...prev, skipOverlay.type!]);
+                                    }
+                                    setSkipOverlay({ show: false, type: null, countdown: 5 });
+                                  }}
+                                  className="px-4 py-1.5 bg-gray-800 hover:bg-gray-700 font-bold rounded transition border border-gray-700 text-xs text-white"
+                                >
+                                  Отмена
+                                </button>
                               </div>
-                              
+                            )}
+
+                            {/* Кнопка Пропустить титры (резервная ручная) */}
+                            {showSkipIntro && (
+                              <button
+                                onClick={playNextEpisode}
+                                className="absolute bottom-16 right-4 px-4 py-2.5 bg-white text-black font-extrabold rounded shadow-2xl hover:bg-red-600 hover:text-white transition duration-300 text-sm z-30 flex items-center space-x-1"
+                              >
+                                <span>Пропустить титры</span>
+                                <span>➔</span>
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-center justify-center p-12 bg-black/40 border border-gray-800 rounded-lg space-y-6">
+                            <div className="text-center space-y-2">
+                              <span className="text-lg text-white font-semibold">Готово к трансляции!</span>
+                              <p className="text-sm text-gray-500 max-w-md">
+                                Торрент успешно кэшируется в TorrServer. Вы можете смотреть его во встроенном плеере или открыть во внешнем.
+                              </p>
+                            </div>
+
+                            <div className="flex flex-wrap gap-4 justify-center">
+                              {/* Во встроенном плеере */}
+                              <button
+                                onClick={() => setIsPlaying(true)}
+                                className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded flex items-center space-x-2 transition"
+                              >
+                                <span>▶</span>
+                                <span>Смотреть здесь</span>
+                              </button>
+
+                              {/* Открыть во внешнем плеере */}
+                              <a
+                                href={getVlcLink()}
+                                className="px-6 py-2.5 bg-gray-800 hover:bg-gray-700 text-white font-bold rounded flex items-center space-x-2 border border-gray-700 transition"
+                              >
+                                <span>🧡</span>
+                                <span>Открыть в VLC</span>
+                              </a>
+
+                              {/* Скопировать ссылку */}
                               <button
                                 onClick={() => {
-                                  if (skipOverlay.type) {
-                                    setCancelledSkips(prev => [...prev, skipOverlay.type!]);
-                                  }
-                                  setSkipOverlay({ show: false, type: null, countdown: 5 });
-                                }}
-                                className="px-4 py-1.5 bg-gray-800 hover:bg-gray-700 font-bold rounded transition border border-gray-700 text-xs text-white"
+                                    navigator.clipboard.writeText(getStreamLink());
+                                    alert("Ссылка на видеопоток скопирована в буфер обмена!");
+                                  }}
+                                className="px-4 py-2.5 bg-transparent hover:bg-gray-800 text-gray-400 hover:text-white rounded border border-gray-800 transition text-sm"
                               >
-                                Отмена
+                                Скопировать ссылку
                               </button>
                             </div>
-                          )}
-
-                          {/* Кнопка Пропустить титры (резервная ручная) */}
-                          {showSkipIntro && (
-                            <button
-                              onClick={playNextEpisode}
-                              className="absolute bottom-16 right-4 px-4 py-2.5 bg-white text-black font-extrabold rounded shadow-2xl hover:bg-red-600 hover:text-white transition duration-300 text-sm z-30 flex items-center space-x-1"
-                            >
-                              <span>Пропустить титры</span>
-                              <span>➔</span>
-                            </button>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="flex flex-col items-center justify-center p-12 bg-black/40 border border-gray-800 rounded-lg space-y-6">
-                          <div className="text-center space-y-2">
-                            <span className="text-lg text-white font-semibold">Готово к трансляции!</span>
-                            <p className="text-sm text-gray-500 max-w-md">
-                              Торрент успешно кэшируется в TorrServer. Вы можете смотреть его во встроенном плеере или открыть во внешнем.
-                            </p>
                           </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
 
-                          <div className="flex flex-wrap gap-4 justify-center">
-                            {/* Во встроенном плеере */}
-                            <button
-                              onClick={() => setIsPlaying(true)}
-                              className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded flex items-center space-x-2 transition"
-                            >
-                              <span>▶</span>
-                              <span>Смотреть здесь</span>
-                            </button>
-
-                            {/* Открыть во внешнем плеере */}
-                            <a
-                              href={getVlcLink()}
-                              className="px-6 py-2.5 bg-gray-800 hover:bg-gray-700 text-white font-bold rounded flex items-center space-x-2 border border-gray-700 transition"
-                            >
-                              <span>🧡</span>
-                              <span>Открыть в VLC</span>
-                            </a>
-
-                            {/* Скопировать ссылку */}
-                            <button
-                              onClick={() => {
-                                navigator.clipboard.writeText(getStreamLink());
-                                alert("Ссылка на видеопоток скопирована в буфер обмена!");
-                              }}
-                              className="px-4 py-2.5 bg-transparent hover:bg-gray-800 text-gray-400 hover:text-white rounded border border-gray-800 transition text-sm"
-                            >
-                              Скопировать ссылку
-                            </button>
+                {/* Правая колонка: Список файлов (серий) */}
+                <div className="space-y-4">
+                  {torrTorrent.file_list && torrTorrent.file_list.length > 1 && (
+                    <div className="space-y-3">
+                      <span className="text-sm font-bold text-gray-400 block">Список серий:</span>
+                      <div className="max-h-[380px] overflow-y-auto border border-gray-800 rounded bg-black/40 p-2 space-y-1 scrollbar-thin">
+                        {torrTorrent.file_list.map((file: any) => (
+                          <div
+                            key={file.id}
+                            onClick={() => {
+                              setSelectedFileId(file.id);
+                              if (isPlaying) {
+                                setShowSkipIntro(false);
+                              }
+                            }}
+                            className={`p-2.5 rounded text-xs cursor-pointer truncate transition duration-200 ${
+                              selectedFileId === file.id
+                                ? "bg-red-600 text-white font-bold shadow-md"
+                                : "text-gray-300 hover:bg-gray-800 hover:text-white"
+                            }`}
+                            title={file.path.split("/").pop()}
+                          >
+                            {file.path.split("/").pop()}
                           </div>
-                        </div>
-                      )}
+                        ))}
+                      </div>
                     </div>
-                  );
-                })()}
+                  )}
+                </div>
               </div>
-
-              {/* Правая колонка: Список файлов (серий) */}
-              <div className="space-y-4">
-                {torrTorrent.file_list && torrTorrent.file_list.length > 1 && (
-                  <div className="space-y-3">
-                    <span className="text-sm font-bold text-gray-400 block">Список серий:</span>
-                    <div className="max-h-[380px] overflow-y-auto border border-gray-800 rounded bg-black/40 p-2 space-y-1 scrollbar-thin">
-                      {torrTorrent.file_list.map((file: any) => (
-                        <div
-                          key={file.id}
-                          onClick={() => {
-                            setSelectedFileId(file.id);
-                            if (isPlaying) {
-                              setShowSkipIntro(false);
-                            }
-                          }}
-                          className={`p-2.5 rounded text-xs cursor-pointer truncate transition duration-200 ${
-                            selectedFileId === file.id
-                              ? "bg-red-600 text-white font-bold shadow-md"
-                              : "text-gray-300 hover:bg-gray-800 hover:text-white"
-                          }`}
-                          title={file.path.split("/").pop()}
-                        >
-                          {file.path.split("/").pop()}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
+            )
           )}
         </div>
       </div>
