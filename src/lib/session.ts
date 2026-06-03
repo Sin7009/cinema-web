@@ -47,6 +47,19 @@ export async function setSession(data: Record<string, any>) {
 }
 
 export async function getSession(): Promise<Record<string, any> | null> {
+  const adminToken = process.env.PLEX_TOKEN;
+  if (adminToken) {
+    return {
+      authToken: adminToken,
+      user: {
+        username: "Plex Admin",
+        email: "",
+        id: "admin",
+        thumb: null
+      }
+    };
+  }
+
   const cookieStore = await cookies();
   const sessionCookie = cookieStore.get("session");
   if (!sessionCookie) return null;

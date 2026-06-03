@@ -302,7 +302,7 @@ export default function Home() {
               movies={continueWatching}
               onMovieClick={setSelectedMovie}
               plexAuthToken={user?.authToken}
-              plexServerUrl={process.env.PLEX_SERVER_URL}
+              plexServerUrl={user?.plexServerUrl || "https://plex.nas-soft.com"}
             />
 
             {/* 2. Моя медиатека (Plex) */}
@@ -311,7 +311,7 @@ export default function Home() {
               movies={plexMovies}
               onMovieClick={setSelectedMovie}
               plexAuthToken={user?.authToken}
-              plexServerUrl={process.env.PLEX_SERVER_URL}
+              plexServerUrl={user?.plexServerUrl || "https://plex.nas-soft.com"}
             />
 
             {/* 3. Тренды (TMDB) */}
@@ -344,7 +344,7 @@ export default function Home() {
           movie={selectedMovie}
           onClose={() => setSelectedMovie(null)}
           plexAuthToken={user?.authToken}
-          plexServerUrl={process.env.PLEX_SERVER_URL}
+          plexServerUrl={user?.plexServerUrl || "https://plex.nas-soft.com"}
         />
       )}
     </div>

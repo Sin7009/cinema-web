@@ -7,7 +7,13 @@ export async function GET() {
     return NextResponse.json({ authenticated: false }, { status: 401 });
   }
 
-  return NextResponse.json({ authenticated: true, user: session.user });
+  return NextResponse.json({
+    authenticated: true,
+    user: {
+      ...session.user,
+      plexServerUrl: process.env.PLEX_SERVER_URL || "https://plex.nas-soft.com"
+    }
+  });
 }
 
 export async function DELETE() {
