@@ -95,20 +95,20 @@ export default function Home() {
   // Экран загрузки
   if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center bg-[#141414]">
-        <div className="text-center space-y-4">
-          <span className="text-4xl font-extrabold text-red-600 animate-pulse tracking-wider">
-            NETFLIX
+      <div className="flex h-screen items-center justify-center bg-[#07080e]">
+        <div className="text-center space-y-6">
+          <span className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-violet-400 via-fuchsia-500 to-pink-500 animate-pulse tracking-widest font-sans">
+            SINFLEX
           </span>
           <div className="flex justify-center">
-            <div className="w-8 h-8 border-4 border-t-red-600 border-gray-800 rounded-full animate-spin" />
+            <div className="w-10 h-10 border-4 border-t-violet-500 border-white/5 rounded-full animate-spin shadow-[0_0_15px_rgba(168,85,247,0.4)]" />
           </div>
         </div>
       </div>
     );
   }
 
-  // Главная страница Netflix Clone
+  // Главная страница Sinflex
   return (
     <div className="relative pb-24 bg-[#141414] min-h-screen">
       <Header

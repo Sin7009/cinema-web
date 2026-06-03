@@ -4,7 +4,7 @@ import { getOrDownloadTorrentFile } from "@/lib/torrentCache";
 
 export async function POST(req: NextRequest) {
   try {
-    const { link, title } = await req.json();
+    const { link, title, poster } = await req.json();
     if (!link) {
       return NextResponse.json({ error: "Missing torrent link" }, { status: 400 });
     }
@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     if (link.startsWith("magnet:")) {
       // Для magnet-ссылок используем стандартный метод добавления
       console.log(`[Add Torrent] Adding magnet link directly: ${link.substring(0, 50)}...`);
-      torrent = await addTorrent(link);
+      torrent = await addTorrent(link, title, poster);
     } else {
       // Для HTTP/HTTPS ссылок скачиваем и кэшируем .torrent-файл
       console.log(`[Add Torrent] Processing torrent URL: ${link}`);
@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
         const fileBuffer = await getOrDownloadTorrentFile(link);
         if (fileBuffer && fileBuffer.length > 0) {
           // Загружаем файл напрямую в TorrServer
-          torrent = await uploadTorrent(fileBuffer, title || "torrent");
+          torrent = await uploadTorrent(fileBuffer, title || "torrent", poster);
         }
       } catch (err) {
         console.error("[Add Torrent] Failed to cache/upload torrent file, trying fallback:", err);
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
       // Резервный вариант: если кэширование или загрузка файла не удались, пробуем добавить по ссылке
       if (!torrent) {
         console.log("[Add Torrent] Fallback: adding via URL link directly");
-        torrent = await addTorrent(link);
+        torrent = await addTorrent(link, title, poster);
       }
     }
 

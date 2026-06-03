@@ -11,12 +11,12 @@ interface HeaderProps {
 
 export default function Header({ user, searchQuery, setSearchQuery, onLogout }: HeaderProps) {
   return (
-    <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between px-6 md:px-12 py-4 transition-all duration-500 bg-gradient-to-b from-black/80 to-transparent hover:bg-black/95">
+    <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between px-6 md:px-12 py-4 transition-all duration-500 glass border-b border-white/5 bg-black/20 backdrop-blur-xl">
       <div className="flex items-center space-x-8">
-        <h1 className="text-3xl font-extrabold tracking-wider text-red-600 cursor-pointer select-none">
-          NETFLIX
+        <h1 className="text-3xl font-black tracking-widest bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-500 bg-clip-text text-transparent cursor-pointer select-none drop-shadow-[0_0_15px_rgba(217,70,239,0.35)] hover:scale-105 transition duration-300">
+          SINFLEX
         </h1>
-        <nav className="hidden md:flex space-x-6 text-sm font-medium text-gray-300">
+        <nav className="hidden md:flex space-x-6 text-sm font-bold text-gray-400">
           <span className="text-white hover:text-white cursor-pointer transition">Главная</span>
           <span className="hover:text-white cursor-pointer transition">Фильмы</span>
           <span className="hover:text-white cursor-pointer transition">Сериалы</span>

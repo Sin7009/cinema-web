@@ -1,48 +1,57 @@
 @import "tailwindcss";
 
 :root {
-  --background: #141414;
+  --background: #07060f;
   --foreground: #ffffff;
-  --netflix-red: #e50914;
+  --font-outfit: var(--font-outfit);
+  --sinflex-purple: #8b5cf6;
+  --sinflex-pink: #ec4899;
+  --sinflex-red: #ef4444;
 }
 
 body {
   background-color: var(--background);
   color: var(--foreground);
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: var(--font-outfit), 'Outfit', 'Inter', system-ui, -apple-system, sans-serif;
   overflow-x: hidden;
   margin: 0;
   padding: 0;
+  letter-spacing: -0.01em;
 }
 
-/* Стилизация скроллбара */
+/* Тонкий неоновый скроллбар */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #141414;
+  background: #07060f;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #333333;
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #555555;
-}
-
-/* Эффект Glassmorphism */
-.glass {
-  background: rgba(20, 20, 20, 0.7);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: rgba(139, 92, 246, 0.3); /* Фиолетовый полупрозрачный */
+  border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-/* Анимация пульсации для Shimmer скелетонов */
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(236, 72, 153, 0.6); /* Розовый при наведении */
+  box-shadow: 0 0 10px rgba(236, 72, 153, 0.5);
+}
+
+/* Премиальный Glassmorphism 2026 */
+.glass {
+  background: rgba(10, 8, 20, 0.65);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 
+    0 4px 30px rgba(0, 0, 0, 0.4),
+    inset 0 1px 1px rgba(255, 255, 255, 0.05);
+}
+
+/* Shimmer скелетоны с фиолетовым отливом */
 @keyframes shimmer {
   0% {
     background-position: -200% 0;
@@ -53,17 +62,25 @@ body {
 }
 
 .shimmer {
-  background: linear-gradient(90deg, #1f1f1f 25%, #2a2a2a 50%, #1f1f1f 75%);
+  background: linear-gradient(90deg, #100f23 25%, #1b1935 50%, #100f23 75%);
   background-size: 200% 100%;
-  animation: shimmer 1.5s infinite linear;
+  animation: shimmer 1.8s infinite linear;
 }
 
-/* Скрытие скроллбара в каруселях */
+/* Скрытие скроллбара */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
 .no-scrollbar {
-  -ms-overflow-style: none;  /* IE and Edge */
-  scrollbar-width: none;  /* Firefox */
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
+/* Пульсирующий неоновый эффект */
+.neon-glow {
+  box-shadow: 0 0 15px rgba(139, 92, 246, 0.35);
+}
+
+.neon-text {
+  text-shadow: 0 0 10px rgba(236, 72, 153, 0.4);
+}

@@ -10,6 +10,7 @@ export interface TorrTorrent {
   hash: string;
   title: string;
   poster: string;
+  category?: string;
   data: string;
   timestamp: number;
   file_list?: TorrFile[];
@@ -81,6 +82,7 @@ function mapTorrentResponse(data: any): TorrTorrent | null {
     hash: data.hash || "",
     title: data.title || "",
     poster: data.poster || "",
+    category: data.category || "",
     data: data.data || "",
     timestamp: data.timestamp || 0,
     file_list: file_list.length > 0 ? file_list : undefined
@@ -88,10 +90,13 @@ function mapTorrentResponse(data: any): TorrTorrent | null {
 }
 
 // Добавить торрент по magnet или torrent-ссылке
-export async function addTorrent(link: string): Promise<TorrTorrent | null> {
+export async function addTorrent(link: string, title?: string, poster?: string): Promise<TorrTorrent | null> {
   const data = await requestTorrServer("/torrents", {
     action: "add",
     link: link,
+    title: title || "",
+    poster: poster || "",
+    category: "sinflex",
     save_to_db: true,
   });
 
@@ -99,12 +104,17 @@ export async function addTorrent(link: string): Promise<TorrTorrent | null> {
 }
 
 // Загрузить торрент в TorrServer как файл .torrent
-export async function uploadTorrent(fileBuffer: Buffer, title: string): Promise<TorrTorrent | null> {
+export async function uploadTorrent(fileBuffer: Buffer, title: string, poster?: string): Promise<TorrTorrent | null> {
   try {
     const formData = new FormData();
     const fileBlob = new Blob([new Uint8Array(fileBuffer)], { type: "application/x-bittorrent" });
     formData.append("file", fileBlob, `${title || "torrent"}.torrent`);
     formData.append("save", "true");
+    
+    // Передаем дополнительные метаданные в TorrServer
+    if (title) formData.append("title", title);
+    if (poster) formData.append("poster", poster);
+    formData.append("category", "sinflex");
 
     const res = await fetch(`${TORRSERVER_API_URL}/torrent/upload`, {
       method: "POST",
@@ -120,11 +130,29 @@ export async function uploadTorrent(fileBuffer: Buffer, title: string): Promise<
     const data = await res.json();
     
     // В новых версиях API может возвращать массив объектов [{hash, title, ...}]
+    let torrent: TorrTorrent | null = null;
     if (Array.isArray(data) && data.length > 0) {
-      return mapTorrentResponse(data[0]);
+      torrent = mapTorrentResponse(data[0]);
+    } else {
+      torrent = mapTorrentResponse(data);
     }
-    
-    return mapTorrentResponse(data);
+
+    // Если по какой-то причине TorrServer не сохранил title/poster при upload (зависит от версии),
+    // принудительно обновим их через action: update
+    if (torrent && torrent.hash && (title || poster)) {
+      await requestTorrServer("/torrents", {
+        action: "update",
+        hash: torrent.hash,
+        title: title || torrent.title || "",
+        poster: poster || torrent.poster || "",
+        category: "sinflex",
+        save_to_db: true,
+      });
+      torrent.title = title || torrent.title;
+      torrent.poster = poster || torrent.poster;
+    }
+
+    return torrent;
   } catch (error) {
     console.error("TorrServer upload fetch error:", error);
     return null;
@@ -153,7 +181,9 @@ export async function listTorrents(): Promise<TorrTorrent[]> {
     action: "list",
   });
   if (Array.isArray(data)) {
-    return data.map(mapTorrentResponse).filter(Boolean) as TorrTorrent[];
+    const list = data.map(mapTorrentResponse).filter(Boolean) as TorrTorrent[];
+    // Фильтруем раздачи: оставляем только те, у которых есть постер ИЛИ у которых категория "sinflex" (1C)
+    return list.filter(t => (t.poster && t.poster.trim() !== "") || t.category === "sinflex");
   }
   return [];
 }

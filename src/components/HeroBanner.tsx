@@ -31,9 +31,9 @@ export default function HeroBanner({ movie, onMovieClick }: HeroBannerProps) {
           alt={getMovieTitle(movie)}
           className="w-full h-full object-cover opacity-60"
         />
-        {/* Градиенты Netflix */}
-        <div className="absolute inset-0 bg-gradient-to-r from-[#141414] via-black/20 to-transparent w-[50%] h-full" />
-        <div className="absolute inset-0 bg-gradient-to-t from-[#141414] via-transparent to-transparent w-full h-full" />
+        {/* Градиенты Sinflex */}
+        <div className="absolute inset-0 bg-gradient-to-r from-[#07060f] via-[#07060f]/60 to-transparent w-[55%] h-full" />
+        <div className="absolute inset-0 bg-gradient-to-t from-[#07060f] via-transparent to-transparent w-full h-full" />
       </div>
 
       {/* Текстовый контент */}
@@ -48,14 +48,14 @@ export default function HeroBanner({ movie, onMovieClick }: HeroBannerProps) {
         <div className="flex items-center space-x-3 pt-2">
           <button
             onClick={() => onMovieClick(movie)}
-            className="flex items-center space-x-2 px-6 py-2.5 bg-white text-black font-bold rounded hover:bg-white/80 transition duration-300 shadow-md"
+            className="flex items-center space-x-2 px-6 py-2.5 bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white font-bold rounded-lg hover:from-violet-500 hover:to-fuchsia-500 transition duration-300 shadow-[0_0_15px_rgba(139,92,246,0.45)] hover:scale-105 transform cursor-pointer"
           >
             <span className="text-lg">▶</span>
             <span>Смотреть</span>
           </button>
           <button
             onClick={() => onMovieClick(movie)}
-            className="flex items-center space-x-2 px-6 py-2.5 bg-gray-500/40 text-white font-bold rounded hover:bg-gray-500/60 border border-gray-500/30 transition duration-300 shadow-md"
+            className="flex items-center space-x-2 px-6 py-2.5 bg-white/10 hover:bg-white/15 text-white font-bold rounded-lg border border-white/10 backdrop-blur-md transition duration-300 hover:scale-105 transform cursor-pointer"
           >
             <span className="text-lg">ⓘ</span>
             <span>Подробнее</span>

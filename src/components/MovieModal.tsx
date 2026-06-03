@@ -45,6 +45,11 @@ function parseSeasonNumber(filePath: string): number {
   return 1; // По умолчанию 1 сезон
 }
 
+function isVideoFile(filePath: string): boolean {
+  const ext = filePath.split(".").pop()?.toLowerCase();
+  return !!ext && ["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "ts", "m4v", "mpeg", "mpg"].includes(ext);
+}
+
 interface MovieModalProps {
   movie: any;
   onClose: () => void;
@@ -64,6 +69,14 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
   const [torrTorrent, setTorrTorrent] = useState<any>(null);
   const [selectedFileId, setSelectedFileId] = useState<number | null>(null);
   const [currentSeason, setCurrentSeason] = useState<number | null>(null);
+
+  // Обёртка для фильтрации не-видео файлов
+  const setFilteredTorrTorrent = (torrent: any) => {
+    if (torrent && Array.isArray(torrent.file_list)) {
+      torrent.file_list = torrent.file_list.filter((f: any) => isVideoFile(f.path));
+    }
+    setTorrTorrent(torrent);
+  };
 
   // Состояние встроенного плеера
   const [isPlaying, setIsPlaying] = useState(false);
@@ -134,8 +147,8 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
           const res = await fetch(`/api/torrents/get?hash=${movie.hash}`);
           if (res.ok) {
             const data = await res.json();
-            setTorrTorrent(data.torrent);
-            const files = data.torrent.file_list || [];
+            setFilteredTorrTorrent(data.torrent);
+            const files = data.torrent.file_list ? data.torrent.file_list.filter((f: any) => isVideoFile(f.path)) : [];
             if (files.length === 1) {
               setSelectedFileId(files[0].id);
             }
@@ -188,9 +201,9 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
             const data = await res.json();
             if (data.torrent && data.torrent.file_list && data.torrent.file_list.length > 0) {
               console.log(`[TorrServer Polling Success] File list loaded: ${data.torrent.file_list.length} files`);
-              setTorrTorrent(data.torrent);
-              const files = data.torrent.file_list;
-              if (selectedFileId === null) {
+              setFilteredTorrTorrent(data.torrent);
+              const files = data.torrent.file_list.filter((f: any) => isVideoFile(f.path));
+              if (selectedFileId === null && files.length > 0) {
                 setSelectedFileId(files[0].id); // Автовыбор первой серии/файла
               }
             }
@@ -245,18 +258,19 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
     setAddingTorrent(true);
     try {
       const link = torrent.magnetUrl || torrent.downloadUrl;
+      const posterUrl = movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : "";
       const res = await fetch("/api/torrents/add", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ link, title: movieTitle }),
+        body: JSON.stringify({ link, title: movieTitle, poster: posterUrl }),
       });
 
       if (res.ok) {
         const data = await res.json();
-        setTorrTorrent(data.torrent);
+        setFilteredTorrTorrent(data.torrent);
         setActiveTab("watch"); // Всегда переключаемся во вкладку воспроизведения
 
-        const files = data.torrent.file_list || [];
+        const files = data.torrent.file_list ? data.torrent.file_list.filter((f: any) => isVideoFile(f.path)) : [];
         if (files.length > 0) {
           setSelectedFileId(files[0].id); // Выбираем первый файл по умолчанию
         }
@@ -284,6 +298,23 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
     } else {
       setIsPlaying(false);
       alert("Вы посмотрели последнюю серию!");
+    }
+  };
+
+  const playNextEpisodeFromEffect = () => {
+    // Вспомогательная функция без alert, чтобы не блокировать UI в асинхронных хэндлерах
+    if (!torrTorrent || !torrTorrent.file_list || selectedFileId === null) return;
+    const files = torrTorrent.file_list;
+    const currentIndex = files.findIndex((f: any) => f.id === selectedFileId);
+    if (currentIndex !== -1 && currentIndex < files.length - 1) {
+      setSelectedFileId(files[currentIndex + 1].id);
+      setIsPlaying(true);
+      setShowSkipIntro(false);
+      setSkipTimes(null);
+      setCancelledSkips([]);
+      setSkipOverlay({ show: false, type: null, countdown: 5 });
+    } else {
+      setIsPlaying(false);
     }
   };
 
@@ -526,17 +557,17 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                 })()}
               </div>
 
-              <div className="space-y-4 text-sm border-l border-gray-800 pl-0 md:pl-8">
+              <div className="space-y-4 text-sm border-l border-white/5 pl-0 md:pl-8">
                 <div>
                   <span className="text-gray-500">В ролях:</span>
-                  <p className="text-gray-300 mt-1">
+                  <p className="text-gray-300 mt-1 font-medium">
                     {details?.credits?.cast?.slice(0, 5).map((a: any) => a.name).join(", ") || "Загрузка..."}
                   </p>
                 </div>
                 {movie.vote_average && (
                   <div>
                     <span className="text-gray-500">Рейтинг TMDB:</span>
-                    <p className="text-green-500 font-bold text-base mt-1">
+                    <p className="text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-emerald-400 font-bold text-base mt-1">
                       ★ {movie.vote_average.toFixed(1)}
                     </p>
                   </div>
@@ -551,47 +582,49 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
               {loadingTorrents ? (
                 <div className="space-y-3">
                   {[1, 2, 3].map((n) => (
-                    <div key={n} className="h-16 shimmer rounded-md" />
+                    <div key={n} className="h-16 bg-white/5 border border-white/5 animate-pulse rounded-lg" />
                   ))}
                 </div>
               ) : torrents.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
+                <div className="text-center py-12 text-gray-500">
                   Раздач не найдено. Настройте индексеры в Jackett.
                 </div>
               ) : (
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto rounded-lg border border-white/5">
                   <table className="w-full text-left text-sm text-gray-300">
-                    <thead className="text-xs text-gray-500 uppercase border-b border-gray-800">
+                    <thead className="text-xs text-gray-400 uppercase bg-white/5 border-b border-white/5">
                       <tr>
-                        <th className="py-3 px-4">Раздача / Название</th>
-                        <th className="py-3 px-2 text-center">Размер</th>
-                        <th className="py-3 px-2 text-center">Качество</th>
-                        <th className="py-3 px-2 text-center text-green-500">Сиды</th>
-                        <th className="py-3 px-4 text-center">Действие</th>
+                        <th className="py-3 px-4 font-semibold">Раздача / Название</th>
+                        <th className="py-3 px-2 text-center font-semibold">Размер</th>
+                        <th className="py-3 px-2 text-center font-semibold">Качество</th>
+                        <th className="py-3 px-2 text-center text-green-400 font-semibold">Сиды</th>
+                        <th className="py-3 px-4 text-center font-semibold">Действие</th>
                       </tr>
                     </thead>
                     <tbody>
                       {torrents.map((t, idx) => (
-                        <tr key={idx} className="border-b border-gray-800/50 hover:bg-gray-800/20">
+                        <tr key={idx} className="border-b border-white/5 hover:bg-white/5 transition-colors">
                           <td className="py-3 px-4 max-w-md font-medium text-white truncate" title={t.title}>
                             {t.title}
-                            <span className="block text-xs text-gray-500">{t.tracker}</span>
+                            <span className="block text-xs text-violet-400/70 mt-0.5">{t.tracker}</span>
                           </td>
                           <td className="py-3 px-2 text-center whitespace-nowrap">{t.sizeHuman}</td>
                           <td className="py-3 px-2 text-center">
-                            <span className={`px-2 py-0.5 rounded text-xs ${
-                              t.quality.includes("4K") ? "bg-red-900/50 text-red-300" : "bg-gray-800 text-gray-300"
+                            <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                              t.quality.includes("4K") 
+                                ? "bg-fuchsia-950/40 text-fuchsia-300 border border-fuchsia-800/30" 
+                                : "bg-white/5 text-gray-300 border border-white/10"
                             }`}>
                               {t.quality}
                             </span>
-                            {t.isHdr && <span className="ml-1 px-1 bg-yellow-600/40 text-yellow-200 rounded text-xxs font-bold">HDR</span>}
+                            {t.isHdr && <span className="ml-1 px-1.5 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded text-xxs font-bold">HDR</span>}
                           </td>
-                          <td className="py-3 px-2 text-center text-green-500 font-bold">{t.seeders}</td>
+                          <td className="py-3 px-2 text-center text-green-400 font-bold">{t.seeders}</td>
                           <td className="py-3 px-4 text-center">
                             <button
                               onClick={() => handleSelectTorrent(t)}
                               disabled={addingTorrent}
-                              className="px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:bg-gray-700 text-white text-xs font-bold rounded transition"
+                              className="px-4 py-1.5 bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 disabled:from-gray-700 disabled:to-gray-800 text-white text-xs font-bold rounded-lg shadow-[0_0_10px_rgba(168,85,247,0.3)] transition duration-300"
                             >
                               {addingTorrent ? "Запуск..." : "Смотреть"}
                             </button>
@@ -608,8 +641,8 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
           {/* ТАБ 3: ВОСПРОИЗВЕДЕНИЕ */}
           {activeTab === "watch" && torrTorrent && (
             (!torrTorrent.file_list || torrTorrent.file_list.length === 0) ? (
-              <div className="flex flex-col items-center justify-center p-12 bg-black/40 border border-gray-800 rounded-lg space-y-6">
-                <div className="w-12 h-12 border-4 border-t-red-600 border-gray-800 rounded-full animate-spin"></div>
+              <div className="flex flex-col items-center justify-center p-12 bg-white/5 border border-white/10 rounded-xl space-y-6">
+                <div className="w-12 h-12 border-4 border-t-violet-500 border-white/10 rounded-full animate-spin"></div>
                 <div className="text-center space-y-2">
                   <span className="text-lg text-white font-semibold">Подключение к раздаче...</span>
                   <p className="text-sm text-gray-400 max-w-md">
@@ -627,18 +660,18 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                     return (
                       <div className="space-y-4">
                         {currentFileName && (
-                          <div className="bg-gray-900/40 border border-gray-800/80 px-4 py-2 rounded-md flex justify-between items-center">
+                          <div className="bg-white/5 border border-white/10 px-4 py-3 rounded-lg flex justify-between items-center">
                             <span className="text-sm font-semibold text-gray-200 truncate pr-4" title={currentFileName}>
-                              🍿 Сейчас играет: <span className="text-white">{currentFileName}</span>
+                              🍿 Сейчас играет: <span className="text-white font-bold">{currentFileName}</span>
                             </span>
                             {loadingSkipTimes && (
-                              <span className="text-xs text-gray-500 flex items-center space-x-1 whitespace-nowrap">
-                                <span className="w-2.5 h-2.5 border-2 border-t-red-600 border-gray-800 rounded-full animate-spin inline-block mr-1"></span>
+                              <span className="text-xs text-gray-400 flex items-center space-x-1 whitespace-nowrap">
+                                <span className="w-2.5 h-2.5 border-2 border-t-violet-500 border-white/10 rounded-full animate-spin inline-block mr-1"></span>
                                 Анализ таймингов...
                               </span>
                             )}
                             {!loadingSkipTimes && (skipTimes?.intro || skipTimes?.outro) && (
-                              <span className="text-xs text-green-500 font-bold bg-green-950/40 px-2 py-0.5 rounded border border-green-800/30 whitespace-nowrap">
+                              <span className="text-xs text-violet-400 font-bold bg-violet-950/40 px-2.5 py-1 rounded border border-violet-800/30 whitespace-nowrap drop-shadow-[0_0_5px_rgba(168,85,247,0.3)]">
                                 ✨ Автопропуск готов
                               </span>
                             )}
@@ -646,7 +679,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                         )}
 
                         {isPlaying ? (
-                          <div className="relative aspect-video w-full bg-black rounded-lg overflow-hidden border border-gray-800 group/player">
+                          <div className="relative aspect-video w-full bg-black rounded-xl overflow-hidden border border-white/5 shadow-2xl group/player">
                             <video
                               ref={videoRef}
                               src={getStreamLink()}
@@ -661,9 +694,9 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
 
                             {/* Интерактивный оверлей автопропуска с таймером отмены */}
                             {skipOverlay.show && (
-                              <div className="absolute bottom-20 left-1/2 -translate-x-1/2 px-6 py-4 bg-black/90 border border-gray-800 rounded-lg shadow-2xl z-40 flex items-center space-x-6 animate-fade-in text-white text-sm whitespace-nowrap">
+                              <div className="absolute bottom-20 left-1/2 -translate-x-1/2 px-6 py-4 bg-black/95 border border-violet-500/20 rounded-xl shadow-2xl z-40 flex items-center space-x-6 animate-fade-in text-white text-sm whitespace-nowrap">
                                 <div className="flex items-center space-x-3">
-                                  <div className="w-8 h-8 rounded-full border-2 border-red-600 flex items-center justify-center font-bold text-red-500 text-xs">
+                                  <div className="w-8 h-8 rounded-full border-2 border-violet-500 flex items-center justify-center font-bold text-violet-400 text-xs shadow-[0_0_10px_rgba(168,85,247,0.4)]">
                                     {skipOverlay.countdown}
                                   </div>
                                   <span className="font-semibold text-gray-100">
@@ -680,7 +713,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                                     }
                                     setSkipOverlay({ show: false, type: null, countdown: 5 });
                                   }}
-                                  className="px-4 py-1.5 bg-gray-800 hover:bg-gray-700 font-bold rounded transition border border-gray-700 text-xs text-white"
+                                  className="px-4 py-1.5 bg-white/10 hover:bg-white/20 font-bold rounded-lg transition duration-200 border border-white/10 text-xs text-white"
                                 >
                                   Отмена
                                 </button>
@@ -691,7 +724,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                             {showSkipIntro && (
                               <button
                                 onClick={playNextEpisode}
-                                className="absolute bottom-16 right-4 px-4 py-2.5 bg-white text-black font-extrabold rounded shadow-2xl hover:bg-red-600 hover:text-white transition duration-300 text-sm z-30 flex items-center space-x-1"
+                                className="absolute bottom-16 right-4 px-4 py-2.5 bg-white text-black font-extrabold rounded-lg shadow-2xl hover:bg-violet-600 hover:text-white transition duration-300 text-sm z-30 flex items-center space-x-1"
                               >
                                 <span>Пропустить титры</span>
                                 <span>➔</span>
@@ -699,10 +732,10 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                             )}
                           </div>
                         ) : (
-                          <div className="flex flex-col items-center justify-center p-12 bg-black/40 border border-gray-800 rounded-lg space-y-6">
+                          <div className="flex flex-col items-center justify-center p-12 bg-white/5 border border-white/10 rounded-xl space-y-6">
                             <div className="text-center space-y-2">
                               <span className="text-lg text-white font-semibold">Готово к трансляции!</span>
-                              <p className="text-sm text-gray-500 max-w-md">
+                              <p className="text-sm text-gray-400 max-w-md">
                                 Торрент успешно кэшируется в TorrServer. Вы можете смотреть его во встроенном плеере или открыть во внешнем.
                               </p>
                             </div>
@@ -711,7 +744,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                               {/* Во встроенном плеере */}
                               <button
                                 onClick={() => setIsPlaying(true)}
-                                className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded flex items-center space-x-2 transition"
+                                className="px-6 py-2.5 bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white font-bold rounded-lg flex items-center space-x-2 transition duration-300 shadow-[0_0_15px_rgba(168,85,247,0.4)]"
                               >
                                 <span>▶</span>
                                 <span>Смотреть здесь</span>
@@ -720,7 +753,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                               {/* Открыть во внешнем плеере */}
                               <a
                                 href={getVlcLink()}
-                                className="px-6 py-2.5 bg-gray-800 hover:bg-gray-700 text-white font-bold rounded flex items-center space-x-2 border border-gray-700 transition"
+                                className="px-6 py-2.5 bg-white/5 hover:bg-white/10 text-white font-bold rounded-lg flex items-center space-x-2 border border-white/10 transition duration-300"
                               >
                                 <span>🧡</span>
                                 <span>Открыть в VLC</span>
@@ -732,7 +765,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                                     navigator.clipboard.writeText(getStreamLink());
                                     alert("Ссылка на видеопоток скопирована в буфер обмена!");
                                   }}
-                                className="px-4 py-2.5 bg-transparent hover:bg-gray-800 text-gray-400 hover:text-white rounded border border-gray-800 transition text-sm"
+                                className="px-4 py-2.5 bg-transparent hover:bg-white/5 text-gray-400 hover:text-white rounded-lg border border-white/5 transition duration-300 text-sm"
                               >
                                 Скопировать ссылку
                               </button>
@@ -752,15 +785,15 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
 
                       {/* Табы сезонов в стиле Netflix (если сезонов больше одного) */}
                       {uniqueSeasons.length > 1 && (
-                        <div className="flex flex-wrap gap-1.5 pb-2 border-b border-gray-800/60 max-h-[120px] overflow-y-auto no-scrollbar">
+                        <div className="flex flex-wrap gap-1.5 pb-2 border-b border-white/5 max-h-[120px] overflow-y-auto no-scrollbar">
                           {uniqueSeasons.map((seasonNum) => (
                             <button
                               key={seasonNum}
                               onClick={() => setCurrentSeason(seasonNum)}
-                              className={`px-3 py-1.5 rounded-md text-xs font-bold transition duration-200 ${
+                              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition duration-200 ${
                                 currentSeason === seasonNum
-                                  ? "bg-red-600 text-white shadow-lg"
-                                  : "bg-[#282828] text-gray-400 hover:text-white hover:bg-gray-800"
+                                  ? "bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white shadow-[0_0_10px_rgba(168,85,247,0.4)]"
+                                  : "bg-[#181926] text-gray-400 hover:text-white hover:bg-white/5 border border-white/5"
                               }`}
                             >
                               Сезон {seasonNum}
@@ -769,7 +802,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                         </div>
                       )}
 
-                      <div className="max-h-[340px] overflow-y-auto border border-gray-800 rounded bg-black/40 p-2 space-y-1 scrollbar-thin">
+                      <div className="max-h-[340px] overflow-y-auto border border-white/5 rounded-lg bg-black/40 p-2 space-y-1 scrollbar-thin">
                         {((uniqueSeasons.length > 1 && currentSeason !== null
                           ? groupedFiles[currentSeason]
                           : torrTorrent.file_list) || []).map((file: any) => (
@@ -781,10 +814,10 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                                 setShowSkipIntro(false);
                               }
                             }}
-                            className={`p-2.5 rounded text-xs cursor-pointer truncate transition duration-200 ${
+                            className={`p-2.5 rounded-lg text-xs cursor-pointer truncate transition duration-200 ${
                               selectedFileId === file.id
-                                ? "bg-red-600 text-white font-bold shadow-md"
-                                : "text-gray-300 hover:bg-gray-800 hover:text-white"
+                                ? "bg-gradient-to-r from-violet-600/90 to-fuchsia-600/90 text-white font-bold shadow-[0_0_10px_rgba(168,85,247,0.3)] border border-violet-500/20"
+                                : "text-gray-300 hover:bg-white/5 hover:text-white border border-transparent"
                             }`}
                             title={file.path.split("/").pop()}
                           >
