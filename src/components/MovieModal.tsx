@@ -3,6 +3,48 @@
 import React, { useState, useEffect, useRef } from "react";
 import { TorrentResult } from "@/lib/jackett";
 
+function parseSeasonNumber(filePath: string): number {
+  const parts = filePath.split("/");
+  
+  // 1. Попробуем извлечь из имен директорий (проверяем все, кроме последнего элемента - имени файла)
+  for (let i = 0; i < parts.length - 1; i++) {
+    const part = parts[i].toLowerCase().trim();
+    
+    // Если папка называется просто числом (например, "1", "02")
+    if (/^\d+$/.test(part)) {
+      return parseInt(part, 10);
+    }
+    // Если папка содержит "season", "сезон", "s" + число (например, "season 1", "сезон 02", "s01", "s1")
+    const seasonMatch = part.match(/(?:season|сезон|s)\s*(\d+)/i);
+    if (seasonMatch) {
+      return parseInt(seasonMatch[1], 10);
+    }
+  }
+
+  // 2. Если в папках не нашли, ищем в имени файла (последняя часть)
+  const fileName = parts[parts.length - 1];
+  
+  // Паттерны типа S01E01, s1e1, S01.E01
+  const sEpMatch = fileName.match(/s(\d+)\s*e\d+/i);
+  if (sEpMatch) {
+    return parseInt(sEpMatch[1], 10);
+  }
+  
+  // Паттерны типа 1x01, 01x02
+  const xMatch = fileName.match(/(\d+)x\d+/i);
+  if (xMatch) {
+    return parseInt(xMatch[1], 10);
+  }
+
+  // Паттерны типа "сезон 1 серия 1"
+  const ruSeasonMatch = fileName.match(/(?:сезон|season)\s*(\d+)/i);
+  if (ruSeasonMatch) {
+    return parseInt(ruSeasonMatch[1], 10);
+  }
+
+  return 1; // По умолчанию 1 сезон
+}
+
 interface MovieModalProps {
   movie: any;
   onClose: () => void;
@@ -21,6 +63,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
   const [addingTorrent, setAddingTorrent] = useState(false);
   const [torrTorrent, setTorrTorrent] = useState<any>(null);
   const [selectedFileId, setSelectedFileId] = useState<number | null>(null);
+  const [currentSeason, setCurrentSeason] = useState<number | null>(null);
 
   // Состояние встроенного плеера
   const [isPlaying, setIsPlaying] = useState(false);
@@ -165,6 +208,37 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
       if (intervalId) clearInterval(intervalId);
     };
   }, [activeTab, torrTorrent, selectedFileId]);
+
+  // Автоматическая синхронизация выбранного сезона при смене активного файла
+  useEffect(() => {
+    if (torrTorrent && torrTorrent.file_list && selectedFileId !== null) {
+      const activeFile = torrTorrent.file_list.find((f: any) => f.id === selectedFileId);
+      if (activeFile) {
+        const season = parseSeasonNumber(activeFile.path);
+        setCurrentSeason(season);
+      }
+    }
+  }, [selectedFileId, torrTorrent]);
+
+  // Группировка файлов по сезонам
+  const groupedFiles = React.useMemo(() => {
+    if (!torrTorrent || !torrTorrent.file_list) return {};
+    const groups: { [key: number]: any[] } = {};
+    torrTorrent.file_list.forEach((file: any) => {
+      const season = parseSeasonNumber(file.path);
+      if (!groups[season]) {
+        groups[season] = [];
+      }
+      groups[season].push(file);
+    });
+    return groups;
+  }, [torrTorrent]);
+
+  const uniqueSeasons = React.useMemo(() => {
+    return Object.keys(groupedFiles)
+      .map(Number)
+      .sort((a, b) => a - b);
+  }, [groupedFiles]);
 
   // 3. Отправка торрента в TorrServer
   const handleSelectTorrent = async (torrent: TorrentResult) => {
@@ -675,8 +749,30 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                   {torrTorrent.file_list && torrTorrent.file_list.length > 1 && (
                     <div className="space-y-3">
                       <span className="text-sm font-bold text-gray-400 block">Список серий:</span>
-                      <div className="max-h-[380px] overflow-y-auto border border-gray-800 rounded bg-black/40 p-2 space-y-1 scrollbar-thin">
-                        {torrTorrent.file_list.map((file: any) => (
+
+                      {/* Табы сезонов в стиле Netflix (если сезонов больше одного) */}
+                      {uniqueSeasons.length > 1 && (
+                        <div className="flex flex-wrap gap-1.5 pb-2 border-b border-gray-800/60 max-h-[120px] overflow-y-auto no-scrollbar">
+                          {uniqueSeasons.map((seasonNum) => (
+                            <button
+                              key={seasonNum}
+                              onClick={() => setCurrentSeason(seasonNum)}
+                              className={`px-3 py-1.5 rounded-md text-xs font-bold transition duration-200 ${
+                                currentSeason === seasonNum
+                                  ? "bg-red-600 text-white shadow-lg"
+                                  : "bg-[#282828] text-gray-400 hover:text-white hover:bg-gray-800"
+                              }`}
+                            >
+                              Сезон {seasonNum}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="max-h-[340px] overflow-y-auto border border-gray-800 rounded bg-black/40 p-2 space-y-1 scrollbar-thin">
+                        {((uniqueSeasons.length > 1 && currentSeason !== null
+                          ? groupedFiles[currentSeason]
+                          : torrTorrent.file_list) || []).map((file: any) => (
                           <div
                             key={file.id}
                             onClick={() => {
