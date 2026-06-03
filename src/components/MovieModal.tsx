@@ -27,21 +27,41 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
   const [showSkipIntro, setShowSkipIntro] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
+  // Состояния автоматического пропуска титров и заставок
+  const [skipTimes, setSkipTimes] = useState<{
+    intro: { start: number; end: number } | null;
+    outro: { start: number; end: number } | null;
+  } | null>(null);
+  const [cancelledSkips, setCancelledSkips] = useState<string[]>([]);
+  const [loadingSkipTimes, setLoadingSkipTimes] = useState(false);
+  const [skipOverlay, setSkipOverlay] = useState<{
+    show: boolean;
+    type: "intro" | "outro" | null;
+    countdown: number;
+  }>({
+    show: false,
+    type: null,
+    countdown: 5,
+  });
+
   const movieId = movie.id || movie.hash;
   const isTorrTorrent = !!movie.hash;
+
+  const isTvShow = movie.media_type === "tv" || !!movie.first_air_date || !!movie.name;
 
   const movieTitle = movie.title || movie.name || movie.original_title || "Без названия";
   const movieYear = movie.release_date || movie.first_air_date || movie.timestamp
     ? new Date(movie.release_date || movie.first_air_date || (movie.timestamp ? movie.timestamp * 1000 : 0)).getFullYear()
     : null;
 
-  // 1. Загрузка подробной информации о фильме
+  // 1. Загрузка подробной информации о фильме или сериале
   useEffect(() => {
     async function loadDetails() {
       setLoadingDetails(true);
       try {
         if (!isTorrTorrent) {
-          const res = await fetch(`/api/movies/${movieId}`);
+          const endpoint = isTvShow ? `/api/tv/${movieId}` : `/api/movies/${movieId}`;
+          const res = await fetch(endpoint);
           if (res.ok) {
             const data = await res.json();
             setDetails(data);
@@ -61,7 +81,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
       }
     }
     loadDetails();
-  }, [movieId, isTorrTorrent]);
+  }, [movieId, isTorrTorrent, isTvShow]);
 
   // 1.2. Автозагрузка деталей торрента из TorrServer по хэшу
   useEffect(() => {
@@ -151,21 +171,102 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
       setSelectedFileId(files[currentIndex + 1].id);
       setIsPlaying(true);
       setShowSkipIntro(false);
+      setSkipTimes(null);
+      setCancelledSkips([]);
+      setSkipOverlay({ show: false, type: null, countdown: 5 });
     } else {
       setIsPlaying(false);
       alert("Вы посмотрели последнюю серию!");
     }
   };
 
+  const handleLoadedMetadata = async (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    const video = e.currentTarget;
+    const duration = video.duration;
+    if (!duration || duration <= 0) return;
+
+    if (!torrTorrent || selectedFileId === null) return;
+    const selectedFile = torrTorrent.file_list.find((f: any) => f.id === selectedFileId);
+    const filename = selectedFile ? selectedFile.path.split("/").pop() : "";
+
+    setLoadingSkipTimes(true);
+    setSkipTimes(null);
+    setCancelledSkips([]);
+    setSkipOverlay({ show: false, type: null, countdown: 5 });
+
+    try {
+      const searchParams = new URLSearchParams({
+        title: movieTitle,
+        filename: filename || "",
+        tmdbId: String(movieId),
+        mediaType: isTvShow ? "tv" : "movie",
+        duration: String(duration),
+      });
+      if (details?.imdb_id) {
+        searchParams.append("imdbId", details.imdb_id);
+      }
+
+      const res = await fetch(`/api/skip-times?${searchParams.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSkipTimes({
+          intro: data.intro || null,
+          outro: data.outro || null,
+        });
+      }
+    } catch (err) {
+      console.error("Failed to load skip times:", err);
+    } finally {
+      setLoadingSkipTimes(false);
+    }
+  };
+
   const handleTimeUpdate = (e: React.SyntheticEvent<HTMLVideoElement>) => {
     const video = e.currentTarget;
-    if (video.duration) {
-      const timeLeft = video.duration - video.currentTime;
+    const currentTime = video.currentTime;
+    if (!video.duration) return;
+
+    // 1. Если загружены точные тайминги автопропуска
+    if (skipTimes) {
+      // Проверка интро
+      if (skipTimes.intro) {
+        const { start, end } = skipTimes.intro;
+        if (currentTime >= start && currentTime < start + 5 && !cancelledSkips.includes("intro")) {
+          const countdown = Math.ceil((start + 5) - currentTime);
+          setSkipOverlay({ show: true, type: "intro", countdown });
+        } else if (currentTime >= start + 5 && !cancelledSkips.includes("intro") && skipOverlay.show && skipOverlay.type === "intro") {
+          video.currentTime = end;
+          setSkipOverlay({ show: false, type: null, countdown: 5 });
+        } else if (skipOverlay.show && skipOverlay.type === "intro" && (currentTime < start || currentTime >= start + 5)) {
+          setSkipOverlay({ show: false, type: null, countdown: 5 });
+        }
+      }
+
+      // Проверка аутро (титры)
+      if (skipTimes.outro) {
+        const { start } = skipTimes.outro;
+        if (currentTime >= start && currentTime < start + 5 && !cancelledSkips.includes("outro")) {
+          const countdown = Math.ceil((start + 5) - currentTime);
+          setSkipOverlay({ show: true, type: "outro", countdown });
+        } else if (currentTime >= start + 5 && !cancelledSkips.includes("outro") && skipOverlay.show && skipOverlay.type === "outro") {
+          setSkipOverlay({ show: false, type: null, countdown: 5 });
+          playNextEpisode();
+        } else if (skipOverlay.show && skipOverlay.type === "outro" && (currentTime < start || currentTime >= start + 5)) {
+          setSkipOverlay({ show: false, type: null, countdown: 5 });
+        }
+      }
+    }
+
+    // Резервный ручной пропуск титров, если таймингов нет в базе
+    const timeLeft = video.duration - currentTime;
+    if (!skipTimes || !skipTimes.outro) {
       if (timeLeft > 5 && timeLeft < 150 && video.duration > 300) {
         setShowSkipIntro(true);
       } else {
         setShowSkipIntro(false);
       }
+    } else {
+      setShowSkipIntro(false);
     }
   };
 
@@ -353,74 +454,127 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
               {/* Левая колонка: Видеоплеер */}
               <div className="lg:col-span-2 space-y-4">
-                {selectedFileId !== null && (
-                  <div className="space-y-4">
-                    {isPlaying ? (
-                      <div className="relative aspect-video w-full bg-black rounded-lg overflow-hidden border border-gray-800 group/player">
-                        <video
-                          ref={videoRef}
-                          src={getStreamLink()}
-                          controls
-                          autoPlay
-                          onTimeUpdate={handleTimeUpdate}
-                          onEnded={handleVideoEnded}
-                          className="w-full h-full"
-                          style={{ outline: "none" }}
-                        />
-                        {/* Кнопка Пропустить титры */}
-                        {showSkipIntro && (
-                          <button
-                            onClick={playNextEpisode}
-                            className="absolute bottom-16 right-4 px-4 py-2.5 bg-white text-black font-extrabold rounded shadow-2xl hover:bg-red-600 hover:text-white transition duration-300 text-sm z-30 flex items-center space-x-1"
-                          >
-                            <span>Пропустить титры</span>
-                            <span>➔</span>
-                          </button>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="flex flex-col items-center justify-center p-12 bg-black/40 border border-gray-800 rounded-lg space-y-6">
-                        <div className="text-center space-y-2">
-                          <span className="text-lg text-white font-semibold">Готово к трансляции!</span>
-                          <p className="text-sm text-gray-500 max-w-md">
-                            Торрент успешно кэшируется в TorrServer. Вы можете смотреть его во встроенном плеере или открыть во внешнем.
-                          </p>
+                {selectedFileId !== null && (() => {
+                  const selectedFile = torrTorrent.file_list.find((f: any) => f.id === selectedFileId);
+                  const currentFileName = selectedFile ? selectedFile.path.split("/").pop() : "";
+                  return (
+                    <div className="space-y-4">
+                      {currentFileName && (
+                        <div className="bg-gray-900/40 border border-gray-800/80 px-4 py-2 rounded-md flex justify-between items-center">
+                          <span className="text-sm font-semibold text-gray-200 truncate pr-4" title={currentFileName}>
+                            🍿 Сейчас играет: <span className="text-white">{currentFileName}</span>
+                          </span>
+                          {loadingSkipTimes && (
+                            <span className="text-xs text-gray-500 flex items-center space-x-1 whitespace-nowrap">
+                              <span className="w-2.5 h-2.5 border-2 border-t-red-600 border-gray-800 rounded-full animate-spin inline-block mr-1"></span>
+                              Анализ таймингов...
+                            </span>
+                          )}
+                          {!loadingSkipTimes && (skipTimes?.intro || skipTimes?.outro) && (
+                            <span className="text-xs text-green-500 font-bold bg-green-950/40 px-2 py-0.5 rounded border border-green-800/30 whitespace-nowrap">
+                              ✨ Автопропуск готов
+                            </span>
+                          )}
                         </div>
+                      )}
 
-                        <div className="flex flex-wrap gap-4 justify-center">
-                          {/* Во встроенном плеере */}
-                          <button
-                            onClick={() => setIsPlaying(true)}
-                            className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded flex items-center space-x-2 transition"
-                          >
-                            <span>▶</span>
-                            <span>Смотреть здесь</span>
-                          </button>
+                      {isPlaying ? (
+                        <div className="relative aspect-video w-full bg-black rounded-lg overflow-hidden border border-gray-800 group/player">
+                          <video
+                            ref={videoRef}
+                            src={getStreamLink()}
+                            controls
+                            autoPlay
+                            onLoadedMetadata={handleLoadedMetadata}
+                            onTimeUpdate={handleTimeUpdate}
+                            onEnded={handleVideoEnded}
+                            className="w-full h-full"
+                            style={{ outline: "none" }}
+                          />
 
-                          {/* Открыть во внешнем плеере */}
-                          <a
-                            href={getVlcLink()}
-                            className="px-6 py-2.5 bg-gray-800 hover:bg-gray-700 text-white font-bold rounded flex items-center space-x-2 border border-gray-700 transition"
-                          >
-                            <span>🧡</span>
-                            <span>Открыть в VLC</span>
-                          </a>
+                          {/* Интерактивный оверлей автопропуска с таймером отмены */}
+                          {skipOverlay.show && (
+                            <div className="absolute bottom-20 left-1/2 -translate-x-1/2 px-6 py-4 bg-black/90 border border-gray-800 rounded-lg shadow-2xl z-40 flex items-center space-x-6 animate-fade-in text-white text-sm whitespace-nowrap">
+                              <div className="flex items-center space-x-3">
+                                <div className="w-8 h-8 rounded-full border-2 border-red-600 flex items-center justify-center font-bold text-red-500 text-xs">
+                                  {skipOverlay.countdown}
+                                </div>
+                                <span className="font-semibold text-gray-100">
+                                  {skipOverlay.type === "intro" 
+                                    ? "Пропускаем вступительную заставку..." 
+                                    : "Переходим к следующей серии..."}
+                                </span>
+                              </div>
+                              
+                              <button
+                                onClick={() => {
+                                  if (skipOverlay.type) {
+                                    setCancelledSkips(prev => [...prev, skipOverlay.type!]);
+                                  }
+                                  setSkipOverlay({ show: false, type: null, countdown: 5 });
+                                }}
+                                className="px-4 py-1.5 bg-gray-800 hover:bg-gray-700 font-bold rounded transition border border-gray-700 text-xs text-white"
+                              >
+                                Отмена
+                              </button>
+                            </div>
+                          )}
 
-                          {/* Скопировать ссылку */}
-                          <button
-                            onClick={() => {
-                              navigator.clipboard.writeText(getStreamLink());
-                              alert("Ссылка на видеопоток скопирована в буфер обмена!");
-                            }}
-                            className="px-4 py-2.5 bg-transparent hover:bg-gray-800 text-gray-400 hover:text-white rounded border border-gray-800 transition text-sm"
-                          >
-                            Скопировать ссылку
-                          </button>
+                          {/* Кнопка Пропустить титры (резервная ручная) */}
+                          {showSkipIntro && (
+                            <button
+                              onClick={playNextEpisode}
+                              className="absolute bottom-16 right-4 px-4 py-2.5 bg-white text-black font-extrabold rounded shadow-2xl hover:bg-red-600 hover:text-white transition duration-300 text-sm z-30 flex items-center space-x-1"
+                            >
+                              <span>Пропустить титры</span>
+                              <span>➔</span>
+                            </button>
+                          )}
                         </div>
-                      </div>
-                    )}
-                  </div>
-                )}
+                      ) : (
+                        <div className="flex flex-col items-center justify-center p-12 bg-black/40 border border-gray-800 rounded-lg space-y-6">
+                          <div className="text-center space-y-2">
+                            <span className="text-lg text-white font-semibold">Готово к трансляции!</span>
+                            <p className="text-sm text-gray-500 max-w-md">
+                              Торрент успешно кэшируется в TorrServer. Вы можете смотреть его во встроенном плеере или открыть во внешнем.
+                            </p>
+                          </div>
+
+                          <div className="flex flex-wrap gap-4 justify-center">
+                            {/* Во встроенном плеере */}
+                            <button
+                              onClick={() => setIsPlaying(true)}
+                              className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded flex items-center space-x-2 transition"
+                            >
+                              <span>▶</span>
+                              <span>Смотреть здесь</span>
+                            </button>
+
+                            {/* Открыть во внешнем плеере */}
+                            <a
+                              href={getVlcLink()}
+                              className="px-6 py-2.5 bg-gray-800 hover:bg-gray-700 text-white font-bold rounded flex items-center space-x-2 border border-gray-700 transition"
+                            >
+                              <span>🧡</span>
+                              <span>Открыть в VLC</span>
+                            </a>
+
+                            {/* Скопировать ссылку */}
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(getStreamLink());
+                                alert("Ссылка на видеопоток скопирована в буфер обмена!");
+                              }}
+                              className="px-4 py-2.5 bg-transparent hover:bg-gray-800 text-gray-400 hover:text-white rounded border border-gray-800 transition text-sm"
+                            >
+                              Скопировать ссылку
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Правая колонка: Список файлов (серий) */}

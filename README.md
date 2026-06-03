@@ -23,7 +23,7 @@
 
 ## 🛠️ Как это работает (Архитектура)
 
-```
+```text
 [ Браузер (Клиент) ] ➔ [ Cinema Web (Next.js) ]
                              │
                              ├─➔ [ TMDB API ] (Каталог и поиск информации)
@@ -33,9 +33,21 @@
 
 ---
 
+## 🔑 Учетные данные внешних сервисов
+
+Для управления и интеграции используются следующие параметры (сохранены в конфигурации):
+
+* **Jackett (Поисковик торрентов):**
+  * **Адрес панели:** `https://jackett.nas-soft.com`
+  * **Админ-пароль:** `YOUR_JACKETT_ADMIN_PASSWORD`
+  * **API-ключ:** `YOUR_JACKETT_API_KEY`
+
+---
+
 ## 📦 Запуск и развертывание
 
 ### 1. Настройка окружения
+
 Создайте в корневой директории проекта файл `.env.local` на основе следующего шаблона:
 
 ```ini
@@ -43,17 +55,19 @@
 NEXT_PUBLIC_APP_URL=https://watch.nas-soft.com
 
 # API Ключ TMDB (The Movie Database)
-TMDB_API_KEY=ваш_ключ_tmdb
+TMDB_API_KEY=YOUR_TMDB_API_KEY
 
 # Адрес API Jackett (внутренний адрес в сети Docker) и его API Key
 JACKETT_API_URL=http://jackett:9117
-JACKETT_API_KEY=ваш_api_key_jackett
+JACKETT_API_KEY=YOUR_JACKETT_API_KEY
+JACKETT_ADMIN_PASSWORD=YOUR_JACKETT_ADMIN_PASSWORD
 
 # API TorrServer (внутренний адрес в сети Docker)
 TORRSERVER_API_URL=http://torrserver:8090
 ```
 
 ### 2. Запуск через Docker Compose
+
 Сервис интегрирован в общую сеть `tweb` и развертывается в связке с Traefik. Пример конфигурации в `docker-compose.yml`:
 
 ```yaml
@@ -83,7 +97,9 @@ networks:
 ```
 
 Для запуска выполните:
+
 ```bash
 docker compose up -d --build
 ```
+
 Приложение будет собрано и запущено на порту `3000` внутри контейнера, а Traefik автоматически выпустит SSL-сертификат Let's Encrypt и сделает сервис доступным по адресу `https://watch.nas-soft.com`.

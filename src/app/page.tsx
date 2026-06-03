@@ -147,9 +147,13 @@ export default function Home() {
                     className="w-full h-full object-cover"
                   />
                   <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition duration-300 flex flex-col justify-end p-3">
-                    <p className="font-bold text-xs sm:text-sm text-white truncate">{movie.title}</p>
+                    <p className="font-bold text-xs sm:text-sm text-white truncate">
+                      {movie.title || movie.name || movie.original_title || movie.original_name || "Без названия"}
+                    </p>
                     <p className="text-xxs text-gray-400 mt-0.5">
-                      {movie.release_date ? new Date(movie.release_date).getFullYear() : ""}
+                      {movie.release_date || movie.first_air_date
+                        ? new Date(movie.release_date || movie.first_air_date).getFullYear()
+                        : ""}
                     </p>
                   </div>
                 </div>

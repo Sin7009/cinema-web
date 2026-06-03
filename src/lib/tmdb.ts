@@ -53,3 +53,23 @@ export async function getMovieDetails(id: string) {
     append_to_response: "credits,videos,similar,recommendations",
   });
 }
+
+export async function searchMulti(query: string, page = "1") {
+  const data = await fetchFromTMDB("/search/multi", { query, page });
+  return data || { results: [], total_pages: 0, total_results: 0 };
+}
+
+export async function getTVShowDetails(id: string) {
+  return await fetchFromTMDB(`/tv/${id}`, {
+    append_to_response: "credits,videos,similar,recommendations",
+  });
+}
+
+export async function getTVShowExternalIds(id: string) {
+  return await fetchFromTMDB(`/tv/${id}/external_ids`);
+}
+
+export async function getSeasonDetails(tvId: string, seasonNumber: string | number) {
+  return await fetchFromTMDB(`/tv/${tvId}/season/${seasonNumber}`);
+}
+

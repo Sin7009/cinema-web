@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { searchMovies } from "@/lib/tmdb";
+import { searchMulti } from "@/lib/tmdb";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -11,9 +11,16 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const data = await searchMovies(query, page);
+    const data = await searchMulti(query, page);
+    
+    // Фильтруем результаты поиска: убираем актеров/людей, оставляем только фильмы и сериалы
+    if (data && data.results) {
+      data.results = data.results.filter((item: any) => item.media_type !== "person");
+    }
+
     return NextResponse.json(data);
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
+
