@@ -1,36 +1,89 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Cinema Web — Онлайн-кинотеатр для TorrServer
 
-## Getting Started
+**Cinema Web** — это легкий, отзывчивый и красивый веб-интерфейс в стиле Netflix (Netflix Clone), созданный специально для удобного поиска и онлайн-просмотра фильмов и сериалов непосредственно с вашего домашнего сервера **TorrServer**.
 
-First, run the development server:
+Проект работает полностью локально, не требует регистрации и авторизации и идеально подходит для хостинга на домашнем NAS под управлением Traefik.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+---
+
+## 🚀 Основные возможности
+
+* **Стриминг торрентов «на лету»:** Воспроизведение видеопотока прямо во встроенном HTML5-плеере в браузере или в один клик во внешнем плеере (например, VLC на мобильных устройствах/ПК) без необходимости скачивать файл на жесткий диск.
+* **Собственная медиатека TorrServer:**
+  * Автоматический вывод всех добавленных в TorrServer торрентов на главной странице.
+  * Раздел **«Недавно запущенные»** для быстрого возвращения к просмотру последних раздач.
+  * Прямой запуск добавленного контента: если торрент уже есть в TorrServer, модальное окно сразу откроет вкладку воспроизведения со списком файлов/серий, минуя поиск раздач.
+* **Интеграция с Jackett:** Автоматический поиск раздач на всех ваших торрент-трекерах по названию и году фильма, фильтрация по качеству (4K UHD, 1080p, 720p, HDR) и сортировка по количеству сидеров.
+* **Каталог TMDB (The Movie Database):**
+  * Красивые разделы «В тренде этой недели», «Популярно сейчас» и «Шедевры мирового кино» на главной странице.
+  * Живой поиск фильмов по названию.
+  * Подробные карточки фильмов с описаниями, жанрами, актерами и рейтингами.
+
+---
+
+## 🛠️ Как это работает (Архитектура)
+
+```
+[ Браузер (Клиент) ] ➔ [ Cinema Web (Next.js) ]
+                             │
+                             ├─➔ [ TMDB API ] (Каталог и поиск информации)
+                             ├─➔ [ Jackett ] (Поиск торрент-раздач на трекерах)
+                             └─➔ [ TorrServer ] (Добавление торрентов и стриминг)
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+---
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 📦 Запуск и развертывание
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### 1. Настройка окружения
+Создайте в корневой директории проекта файл `.env.local` на основе следующего шаблона:
 
-## Learn More
+```ini
+# URL этого веб-приложения для внешнего доступа
+NEXT_PUBLIC_APP_URL=https://watch.nas-soft.com
 
-To learn more about Next.js, take a look at the following resources:
+# API Ключ TMDB (The Movie Database)
+TMDB_API_KEY=ваш_ключ_tmdb
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+# Адрес API Jackett (внутренний адрес в сети Docker) и его API Key
+JACKETT_API_URL=http://jackett:9117
+JACKETT_API_KEY=ваш_api_key_jackett
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+# API TorrServer (внутренний адрес в сети Docker)
+TORRSERVER_API_URL=http://torrserver:8090
+```
 
-## Deploy on Vercel
+### 2. Запуск через Docker Compose
+Сервис интегрирован в общую сеть `tweb` и развертывается в связке с Traefik. Пример конфигурации в `docker-compose.yml`:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```yaml
+services:
+  cinema-web:
+    build:
+      context: ./cinema-web
+      dockerfile: Dockerfile
+    container_name: cinema-web
+    mem_limit: 1g
+    restart: unless-stopped
+    env_file:
+      - ./cinema-web/.env.local
+    networks:
+      - tweb
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.cinema.rule=Host(`watch.nas-soft.com`)"
+      - "traefik.http.routers.cinema.entrypoints=websecure"
+      - "traefik.http.routers.cinema.tls=true"
+      - "traefik.http.routers.cinema.tls.certresolver=myresolver"
+      - "traefik.http.services.cinema-svc.loadbalancer.server.port=3000"
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+networks:
+  tweb:
+    external: true
+```
+
+Для запуска выполните:
+```bash
+docker compose up -d --build
+```
+Приложение будет собрано и запущено на порту `3000` внутри контейнера, а Traefik автоматически выпустит SSL-сертификат Let's Encrypt и сделает сервис доступным по адресу `https://watch.nas-soft.com`.
