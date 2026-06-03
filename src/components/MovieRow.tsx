@@ -27,6 +27,10 @@ export default function MovieRow({ title, movies, onMovieClick, plexAuthToken, p
   };
 
   const getMoviePoster = (movie: any) => {
+    // Если это фильм из TorrServer
+    if (movie.poster) {
+      return movie.poster;
+    }
     // Если это фильм из TMDB
     if (movie.poster_path) {
       return `https://image.tmdb.org/t/p/w300${movie.poster_path}`;
@@ -44,7 +48,7 @@ export default function MovieRow({ title, movies, onMovieClick, plexAuthToken, p
   };
 
   const getMovieYear = (movie: any) => {
-    const dateStr = movie.release_date || movie.first_air_date || movie.originallyAvailableAt;
+    const dateStr = movie.release_date || movie.first_air_date || movie.originallyAvailableAt || (movie.timestamp ? movie.timestamp * 1000 : null);
     if (dateStr) {
       return new Date(dateStr).getFullYear();
     }
@@ -73,7 +77,7 @@ export default function MovieRow({ title, movies, onMovieClick, plexAuthToken, p
         >
           {movies.map((movie) => (
             <div
-              key={movie.id || movie.ratingKey}
+              key={movie.id || movie.ratingKey || movie.hash}
               onClick={() => onMovieClick(movie)}
               className="flex-none w-36 sm:w-44 md:w-52 h-52 sm:h-64 md:h-76 relative rounded-md overflow-hidden cursor-pointer transform hover:scale-105 transition duration-300 shadow-lg hover:shadow-black/60 bg-[#1f1f1f]"
             >

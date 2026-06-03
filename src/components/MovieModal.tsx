@@ -25,12 +25,12 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
   // Состояние встроенного плеера
   const [isPlaying, setIsPlaying] = useState(false);
 
-  const movieId = movie.id || movie.ratingKey;
-  const isPlexMovie = !!movie.ratingKey;
+  const movieId = movie.id || movie.hash;
+  const isTorrTorrent = !!movie.hash;
 
   const movieTitle = movie.title || movie.name || movie.original_title || "Без названия";
-  const movieYear = movie.release_date || movie.first_air_date || movie.originallyAvailableAt
-    ? new Date(movie.release_date || movie.first_air_date || movie.originallyAvailableAt).getFullYear()
+  const movieYear = movie.release_date || movie.first_air_date || movie.timestamp
+    ? new Date(movie.release_date || movie.first_air_date || (movie.timestamp ? movie.timestamp * 1000 : 0)).getFullYear()
     : null;
 
   // 1. Загрузка подробной информации о фильме
@@ -38,20 +38,18 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
     async function loadDetails() {
       setLoadingDetails(true);
       try {
-        if (!isPlexMovie) {
+        if (!isTorrTorrent) {
           const res = await fetch(`/api/movies/${movieId}`);
           if (res.ok) {
             const data = await res.json();
             setDetails(data);
           }
         } else {
-          // Если фильм из Plex, используем данные из пропсов и дополняем
+          // Если это фильм напрямую из TorrServer
           setDetails({
-            overview: movie.summary || movie.tagline || "Описание из Plex.",
-            genres: movie.Genre?.map((g: any) => ({ name: g.tag })) || [],
-            credits: {
-              cast: movie.Role?.map((r: any) => ({ name: r.tag, character: r.role })) || []
-            }
+            overview: movie.stat_string || "Торрент-раздача добавлена в TorrServer.",
+            genres: [],
+            credits: { cast: [] }
           });
         }
       } catch (e) {
@@ -61,7 +59,30 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
       }
     }
     loadDetails();
-  }, [movieId, isPlexMovie]);
+  }, [movieId, isTorrTorrent]);
+
+  // 1.2. Автозагрузка деталей торрента из TorrServer по хэшу
+  useEffect(() => {
+    if (movie.hash) {
+      async function loadTorrTorrent() {
+        try {
+          const res = await fetch(`/api/torrents/get?hash=${movie.hash}`);
+          if (res.ok) {
+            const data = await res.json();
+            setTorrTorrent(data.torrent);
+            const files = data.torrent.file_list || [];
+            if (files.length === 1) {
+              setSelectedFileId(files[0].id);
+            }
+            setActiveTab("watch"); // Сразу переходим во вкладку воспроизведения
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      loadTorrTorrent();
+    }
+  }, [movie.hash]);
 
   // 2. Поиск торрентов через Jackett при переходе на вкладку
   useEffect(() => {

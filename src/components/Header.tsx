@@ -20,7 +20,6 @@ export default function Header({ user, searchQuery, setSearchQuery, onLogout }: 
           <span className="text-white hover:text-white cursor-pointer transition">Главная</span>
           <span className="hover:text-white cursor-pointer transition">Фильмы</span>
           <span className="hover:text-white cursor-pointer transition">Сериалы</span>
-          <span className="hover:text-white cursor-pointer transition">Мой Plex</span>
         </nav>
       </div>
 
@@ -61,16 +60,6 @@ export default function Header({ user, searchQuery, setSearchQuery, onLogout }: 
             <span className="hidden sm:inline text-sm text-gray-300 group-hover:text-white transition">
               {user?.username || "Plex User"}
             </span>
-          </div>
-
-          {/* Выпадающее меню */}
-          <div className="absolute right-0 top-full mt-2 w-48 bg-[#181818] border border-gray-800 rounded-md shadow-xl py-1 hidden group-hover:block transition-all">
-            <button
-              onClick={onLogout}
-              className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition"
-            >
-              Выйти из Plex
-            </button>
           </div>
         </div>
       </div>

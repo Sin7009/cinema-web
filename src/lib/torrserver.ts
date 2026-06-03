@@ -64,3 +64,11 @@ export function getStreamUrl(hash: string, fileId: number): string {
   // Используем внешний публичный домен для вещания на клиенте
   return `https://torserv.nas-soft.com/stream/play?hash=${hash}&id=${fileId}`;
 }
+
+// Получить список всех торрентов в TorrServer
+export async function listTorrents(): Promise<TorrTorrent[]> {
+  const data = await requestTorrServer("/torrents", {
+    action: "list",
+  });
+  return data || [];
+}
