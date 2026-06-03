@@ -106,9 +106,9 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
     }
   }, [movie.hash]);
 
-  // 2. Поиск торрентов через Jackett при переходе на вкладку
+  // 2. Поиск торрентов через Jackett в фоновом режиме сразу при открытии модального окна
   useEffect(() => {
-    if (activeTab === "torrents" && torrents.length === 0) {
+    if (torrents.length === 0 && movieTitle && movieTitle !== "Без названия") {
       async function loadTorrents() {
         setLoadingTorrents(true);
         try {
@@ -126,7 +126,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
       }
       loadTorrents();
     }
-  }, [activeTab, movieTitle, movieYear]);
+  }, [movieTitle, movieYear, torrents.length]);
 
   // 3. Отправка торрента в TorrServer
   const handleSelectTorrent = async (torrent: TorrentResult) => {
@@ -274,6 +274,13 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
     playNextEpisode();
   };
 
+  const getBestTorrent = () => {
+    if (!torrents || torrents.length === 0) return null;
+    const sorted = [...torrents].sort((a, b) => b.seeders - a.seeders);
+    const highQuality = sorted.find(t => (t.quality.includes("1080p") || t.quality.includes("4K") || t.quality.includes("2160p")) && t.seeders > 5);
+    return highQuality || sorted[0];
+  };
+
   const getStreamLink = () => {
     if (!torrTorrent || selectedFileId === null) return "";
     return `https://torserv.nas-soft.com/stream/play?hash=${torrTorrent.hash}&id=${selectedFileId}`;
@@ -368,6 +375,48 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                     ))}
                   </div>
                 )}
+
+                {/* Рекомендуемый торрент (Быстрый запуск в 1 клик) */}
+                {(() => {
+                  const bestTorrent = getBestTorrent();
+                  if (loadingTorrents) {
+                    return (
+                      <div className="mt-6 p-4 bg-gray-900/20 border border-gray-800/80 rounded-lg flex items-center justify-between">
+                        <div className="flex items-center space-x-3 text-sm text-gray-400">
+                          <span className="w-4 h-4 border-2 border-t-red-600 border-gray-800 rounded-full animate-spin inline-block mr-1"></span>
+                          <span>Поиск лучших торрент-раздач в фоне...</span>
+                        </div>
+                      </div>
+                    );
+                  }
+                  if (bestTorrent) {
+                    return (
+                      <div className="mt-6 p-4 bg-red-950/20 border border-red-900/30 rounded-lg flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                        <div className="space-y-1 overflow-hidden">
+                          <span className="text-xxs font-bold uppercase tracking-wider text-red-500 block">Быстрый запуск</span>
+                          <h4 className="text-sm font-bold text-white truncate max-w-full sm:max-w-md" title={bestTorrent.title}>
+                            {bestTorrent.title}
+                          </h4>
+                          <div className="flex items-center space-x-3 text-xs text-gray-400">
+                            <span className="text-green-500 font-bold">★ {bestTorrent.seeders} сидов</span>
+                            <span>•</span>
+                            <span className="px-1.5 py-0.5 bg-gray-800 text-gray-300 rounded text-xxs font-bold">{bestTorrent.quality}</span>
+                            <span>•</span>
+                            <span>{bestTorrent.sizeHuman}</span>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleSelectTorrent(bestTorrent)}
+                          disabled={addingTorrent}
+                          className="px-6 py-2.5 bg-red-600 hover:bg-red-700 disabled:bg-gray-700 text-white text-xs font-extrabold uppercase tracking-wider rounded transition whitespace-nowrap"
+                        >
+                          {addingTorrent ? "Запуск..." : "Смотреть в 1 клик"}
+                        </button>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
               </div>
 
               <div className="space-y-4 text-sm border-l border-gray-800 pl-0 md:pl-8">
