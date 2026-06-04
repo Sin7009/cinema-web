@@ -82,6 +82,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
   const [isPlaying, setIsPlaying] = useState(false);
   const [showSkipIntro, setShowSkipIntro] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [transcodeAudio, setTranscodeAudio] = useState(true);
 
   // Состояния автоматического пропуска титров и заставок
   const [skipTimes, setSkipTimes] = useState<{
@@ -106,9 +107,39 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
   const isTvShow = movie.media_type === "tv" || !!movie.first_air_date || !!movie.name;
 
   const movieTitle = movie.title || movie.name || movie.original_title || "Без названия";
-  const movieYear = movie.release_date || movie.first_air_date || movie.timestamp
-    ? new Date(movie.release_date || movie.first_air_date || (movie.timestamp ? movie.timestamp * 1000 : 0)).getFullYear()
-    : null;
+
+  const movieYear = (() => {
+    // Если это торрент из TorrServer, игнорируем метаданные даты (так как там может быть дата добавления)
+    // и парсим год исключительно из названия раздачи
+    if (isTorrTorrent) {
+      if (movieTitle) {
+        const match = movieTitle.match(/\b(19\d\d|20[0-2]\d)\b/);
+        if (match) return parseInt(match[1], 10);
+      }
+      // Если в названии торрента нет года, попробуем вытащить его из названия первого файла
+      if (torrTorrent && torrTorrent.file_list && torrTorrent.file_list.length > 0) {
+        const firstFile = torrTorrent.file_list[0].path;
+        const match = firstFile.match(/\b(19\d\d|20[0-2]\d)\b/);
+        if (match) return parseInt(match[1], 10);
+      }
+      return null;
+    }
+
+    // Для обычных фильмов из TMDB
+    if (movie.release_date) {
+      return new Date(movie.release_date).getFullYear();
+    }
+    if (movie.first_air_date) {
+      return new Date(movie.first_air_date).getFullYear();
+    }
+    if (movieTitle) {
+      const match = movieTitle.match(/\b(19\d\d|20[0-2]\d)\b/);
+      if (match) return parseInt(match[1], 10);
+    }
+    return null;
+  })();
+
+
 
   // 1. Загрузка подробной информации о фильме или сериале
   useEffect(() => {
@@ -189,38 +220,62 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
     }
   }, [movie, movieTitle, movieYear, torrents.length]);
 
-  // 2.2. Автоматический опрос TorrServer для получения списка файлов, если он изначально пуст
+  // 2.2. Автоматический опрос TorrServer для получения статуса и списка файлов в реальном времени
   useEffect(() => {
+    if (activeTab !== "watch" || !torrTorrent?.hash) return;
+
     let intervalId: NodeJS.Timeout | undefined;
 
-    if (activeTab === "watch" && torrTorrent && (!torrTorrent.file_list || torrTorrent.file_list.length === 0)) {
-      const pollTorrentDetails = async () => {
-        try {
-          const res = await fetch(`/api/torrents/get?hash=${torrTorrent.hash}`);
-          if (res.ok) {
-            const data = await res.json();
-            if (data.torrent && data.torrent.file_list && data.torrent.file_list.length > 0) {
-              console.log(`[TorrServer Polling Success] File list loaded: ${data.torrent.file_list.length} files`);
-              setFilteredTorrTorrent(data.torrent);
+    const pollTorrentDetails = async () => {
+      try {
+        const res = await fetch(`/api/torrents/get?hash=${torrTorrent.hash}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.torrent) {
+            setFilteredTorrTorrent(data.torrent);
+            
+            // Если файлы загрузились впервые и никакой файл не выбран, выберем первый и запустим плеер
+            if (data.torrent.file_list && data.torrent.file_list.length > 0) {
               const files = data.torrent.file_list.filter((f: any) => isVideoFile(f.path));
-              if (selectedFileId === null && files.length > 0) {
-                setSelectedFileId(files[0].id); // Автовыбор первой серии/файла
+              if (files.length > 0) {
+                setSelectedFileId(prev => {
+                  if (prev === null) {
+                    setIsPlaying(true); // Автостарт встроенного плеера при автовыборе файла
+                    return files[0].id;
+                  }
+                  return prev;
+                });
               }
             }
           }
-        } catch (e) {
-          console.error("Error polling torrent details:", e);
         }
-      };
+      } catch (e) {
+        console.error("Error polling torrent details:", e);
+      }
+    };
 
-      pollTorrentDetails();
-      intervalId = setInterval(pollTorrentDetails, 2000);
-    }
+    pollTorrentDetails();
+    intervalId = setInterval(pollTorrentDetails, 3000); // Опрашиваем раз в 3 секунды для живого статуса скорости и пиров
 
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [activeTab, torrTorrent, selectedFileId]);
+  }, [activeTab, torrTorrent?.hash]);
+
+  // Эффект принудительного воспроизведения при монтировании/изменении видеоплеера
+  useEffect(() => {
+    if (isPlaying && videoRef.current) {
+      const playVideo = async () => {
+        try {
+          await videoRef.current?.play();
+        } catch (err) {
+          console.log("Autoplay was prevented by browser, waiting for user interaction:", err);
+        }
+      };
+      playVideo();
+    }
+  }, [isPlaying, selectedFileId, torrTorrent?.hash]);
+
 
   // Автоматическая синхронизация выбранного сезона при смене активного файла
   useEffect(() => {
@@ -273,6 +328,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
         const files = data.torrent.file_list ? data.torrent.file_list.filter((f: any) => isVideoFile(f.path)) : [];
         if (files.length > 0) {
           setSelectedFileId(files[0].id); // Выбираем первый файл по умолчанию
+          setIsPlaying(true); // Автостарт встроенного плеера
         }
       } else {
         alert("Не удалось добавить торрент в TorrServer");
@@ -421,7 +477,9 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
 
   const getStreamLink = () => {
     if (!torrTorrent || selectedFileId === null) return "";
-    return `https://torserv.nas-soft.com/stream/play?hash=${torrTorrent.hash}&id=${selectedFileId}`;
+    const file = torrTorrent.file_list?.find((f: any) => f.id === selectedFileId);
+    const filename = file ? file.path.split("/").pop() : "video.mkv";
+    return `https://torserv.nas-soft.com/stream/${encodeURIComponent(filename || "video.mkv")}?link=${torrTorrent.hash}&index=${selectedFileId}&play`;
   };
 
   const getVlcLink = () => {
@@ -430,51 +488,96 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
     return `vlc://${link.replace("https://", "http://")}`; // VLC на мобилках часто не любит https в кастомной схеме
   };
 
+  const getVideoSrc = () => {
+    if (!torrTorrent || selectedFileId === null) return "";
+    if (hasUnsupportedAudio() && transcodeAudio) {
+      return `/api/stream/transcode?link=${torrTorrent.hash}&index=${selectedFileId}`;
+    }
+    return getStreamLink();
+  };
+
+  const formatSpeed = (bytesPerSec: number | undefined) => {
+    if (!bytesPerSec || bytesPerSec <= 0) return "0 КБ/с";
+    const kbs = bytesPerSec / 1024;
+    if (kbs < 1024) return `${kbs.toFixed(1)} КБ/с`;
+    const mbs = kbs / 1024;
+    return `${mbs.toFixed(1)} МБ/с`;
+  };
+
+
+  const hasUnsupportedAudio = () => {
+    if (!torrTorrent) return false;
+    let filename = "";
+    if (selectedFileId !== null && torrTorrent.file_list) {
+      const file = torrTorrent.file_list.find((f: any) => f.id === selectedFileId);
+      if (file) filename = file.path.split("/").pop() || "";
+    }
+    const title = (torrTorrent.title || "").toLowerCase();
+    const fileLower = filename.toLowerCase();
+    const audioKeywords = ["eac3", "ddp5", "ddp7", "dd+5", "ddp.5", "dts", "ac3", "truehd", "dolby digital"];
+    return audioKeywords.some(kw => title.includes(kw) || fileLower.includes(kw));
+  };
+
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-      <div className="relative w-full max-w-4xl max-h-[90vh] bg-[#181818] border border-gray-800 rounded-lg shadow-2xl overflow-y-auto no-scrollbar">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
+      <div className="relative w-full max-w-6xl max-h-[90vh] bg-[#0b0c15]/90 border border-violet-500/20 rounded-xl shadow-[0_0_50px_rgba(168,85,247,0.15)] overflow-y-auto no-scrollbar font-sans text-white">
         {/* Кнопка Закрыть */}
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 z-50 w-10 h-10 bg-black/50 text-white rounded-full flex items-center justify-center hover:bg-black/80 transition"
+          className="absolute top-4 right-4 z-50 w-10 h-10 bg-black/40 text-gray-400 rounded-full flex items-center justify-center hover:bg-violet-600/80 hover:text-white transition duration-300 border border-white/5"
         >
           ✕
         </button>
 
         {/* Шапка модалки */}
-        <div className="relative h-[300px] bg-black">
-          {movie.backdrop_path ? (
-            <img
-              src={`https://image.tmdb.org/t/p/w780${movie.backdrop_path}`}
-              alt={movieTitle}
-              className="w-full h-full object-cover opacity-50"
-            />
-          ) : (
-            <div className="w-full h-full bg-gradient-to-br from-red-900/40 to-black flex items-center justify-center">
-              <span className="text-3xl font-bold text-red-600">NETFLIX</span>
+        {activeTab !== "watch" ? (
+          <div className="relative h-[300px] bg-black">
+            {movie.backdrop_path ? (
+              <img
+                src={`https://image.tmdb.org/t/p/w780${movie.backdrop_path}`}
+                alt={movieTitle}
+                className="w-full h-full object-cover opacity-60"
+              />
+            ) : (
+              <div className="w-full h-full bg-gradient-to-br from-[#6366f1]/20 via-[#a855f7]/10 to-black flex items-center justify-center">
+                <span className="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-violet-400 via-fuchsia-500 to-pink-500 tracking-wider">SINFLEX</span>
+              </div>
+            )}
+            <div className="absolute inset-0 bg-gradient-to-t from-[#0b0c15] to-transparent" />
+            <div className="absolute bottom-6 left-6 md:left-12 z-10">
+              <h2 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight drop-shadow-[0_2px_10px_rgba(0,0,0,0.5)]">{movieTitle}</h2>
+              {movieYear && <p className="text-sm text-violet-400 font-medium mt-1">{movieYear}</p>}
             </div>
-          )}
-          <div className="absolute inset-0 bg-gradient-to-t from-[#181818] to-transparent" />
-          <div className="absolute bottom-6 left-6 md:left-12 z-10">
-            <h2 className="text-3xl sm:text-4xl font-extrabold text-white">{movieTitle}</h2>
-            <p className="text-sm text-gray-400 mt-1">{movieYear}</p>
           </div>
-        </div>
+        ) : (
+          <div className="relative p-6 border-b border-white/5 bg-[#0b0c15] flex justify-between items-center pr-16">
+            <div>
+              <h2 className="text-xl font-extrabold text-white tracking-tight">{movieTitle}</h2>
+              {movieYear && <span className="text-xs text-violet-400 font-medium mt-0.5 inline-block">{movieYear}</span>}
+            </div>
+          </div>
+        )}
+
 
         {/* Навигация по табам */}
-        <div className="flex border-b border-gray-800 px-6 md:px-12 bg-[#181818] sticky top-0 z-20">
+        <div className="flex border-b border-white/5 px-6 md:px-12 bg-[#0b0c15]/95 sticky top-0 z-20 backdrop-blur-md">
           <button
             onClick={() => setActiveTab("info")}
-            className={`px-6 py-3 font-semibold text-sm transition-all border-b-2 ${
-              activeTab === "info" ? "border-red-600 text-white" : "border-transparent text-gray-400 hover:text-white"
+            className={`px-6 py-4 font-bold text-sm tracking-wide transition-all border-b-2 ${
+              activeTab === "info" 
+                ? "border-violet-500 text-white drop-shadow-[0_0_8px_rgba(168,85,247,0.5)]" 
+                : "border-transparent text-gray-400 hover:text-white"
             }`}
           >
             Информация
           </button>
           <button
             onClick={() => setActiveTab("torrents")}
-            className={`px-6 py-3 font-semibold text-sm transition-all border-b-2 ${
-              activeTab === "torrents" ? "border-red-600 text-white" : "border-transparent text-gray-400 hover:text-white"
+            className={`px-6 py-4 font-bold text-sm tracking-wide transition-all border-b-2 ${
+              activeTab === "torrents" 
+                ? "border-violet-500 text-white drop-shadow-[0_0_8px_rgba(168,85,247,0.5)]" 
+                : "border-transparent text-gray-400 hover:text-white"
             }`}
           >
             Торренты (Jackett)
@@ -482,8 +585,10 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
           {torrTorrent && (
             <button
               onClick={() => setActiveTab("watch")}
-              className={`px-6 py-3 font-semibold text-sm transition-all border-b-2 ${
-                activeTab === "watch" ? "border-red-600 text-white" : "border-transparent text-gray-400 hover:text-white"
+              className={`px-6 py-4 font-bold text-sm tracking-wide transition-all border-b-2 ${
+                activeTab === "watch" 
+                  ? "border-violet-500 text-white drop-shadow-[0_0_8px_rgba(168,85,247,0.5)]" 
+                  : "border-transparent text-gray-400 hover:text-white"
               }`}
             >
               Воспроизведение
@@ -506,7 +611,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                     {details.genres.map((genre: any, idx: number) => (
                       <span
                         key={idx}
-                        className="px-3 py-1 bg-gray-800 text-xs text-gray-300 rounded-full"
+                        className="px-3 py-1 bg-white/5 border border-white/10 text-xs text-gray-300 rounded-full"
                       >
                         {genre.name}
                       </span>
@@ -519,9 +624,9 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                   const bestTorrent = getBestTorrent();
                   if (loadingTorrents) {
                     return (
-                      <div className="mt-6 p-4 bg-gray-900/20 border border-gray-800/80 rounded-lg flex items-center justify-between">
+                      <div className="mt-6 p-4 bg-white/5 border border-white/10 rounded-lg flex items-center justify-between">
                         <div className="flex items-center space-x-3 text-sm text-gray-400">
-                          <span className="w-4 h-4 border-2 border-t-red-600 border-gray-800 rounded-full animate-spin inline-block mr-1"></span>
+                          <span className="w-4 h-4 border-2 border-t-violet-500 border-white/10 rounded-full animate-spin inline-block mr-1"></span>
                           <span>Поиск лучших торрент-раздач в фоне...</span>
                         </div>
                       </div>
@@ -529,16 +634,16 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                   }
                   if (bestTorrent) {
                     return (
-                      <div className="mt-6 p-4 bg-red-950/20 border border-red-900/30 rounded-lg flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                      <div className="mt-6 p-4 bg-violet-950/10 border border-violet-500/20 rounded-xl flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 backdrop-blur-md">
                         <div className="space-y-1 overflow-hidden">
-                          <span className="text-xxs font-bold uppercase tracking-wider text-red-500 block">Быстрый запуск</span>
+                          <span className="text-xxs font-bold uppercase tracking-wider text-violet-400 block drop-shadow-[0_0_6px_rgba(168,85,247,0.4)]">Быстрый запуск</span>
                           <h4 className="text-sm font-bold text-white truncate max-w-full sm:max-w-md" title={bestTorrent.title}>
                             {bestTorrent.title}
                           </h4>
                           <div className="flex items-center space-x-3 text-xs text-gray-400">
-                            <span className="text-green-500 font-bold">★ {bestTorrent.seeders} сидов</span>
+                            <span className="text-green-400 font-bold">★ {bestTorrent.seeders} сидов</span>
                             <span>•</span>
-                            <span className="px-1.5 py-0.5 bg-gray-800 text-gray-300 rounded text-xxs font-bold">{bestTorrent.quality}</span>
+                            <span className="px-1.5 py-0.5 bg-white/5 text-gray-300 rounded text-xxs font-bold border border-white/10">{bestTorrent.quality}</span>
                             <span>•</span>
                             <span>{bestTorrent.sizeHuman}</span>
                           </div>
@@ -546,7 +651,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                         <button
                           onClick={() => handleSelectTorrent(bestTorrent)}
                           disabled={addingTorrent}
-                          className="px-6 py-2.5 bg-red-600 hover:bg-red-700 disabled:bg-gray-700 text-white text-xs font-extrabold uppercase tracking-wider rounded transition whitespace-nowrap"
+                          className="px-6 py-2.5 bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 disabled:from-gray-700 disabled:to-gray-800 text-white text-xs font-extrabold uppercase tracking-wider rounded-lg shadow-[0_0_15px_rgba(168,85,247,0.4)] transition duration-300 whitespace-nowrap"
                         >
                           {addingTorrent ? "Запуск..." : "Смотреть в 1 клик"}
                         </button>
@@ -682,7 +787,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                           <div className="relative aspect-video w-full bg-black rounded-xl overflow-hidden border border-white/5 shadow-2xl group/player">
                             <video
                               ref={videoRef}
-                              src={getStreamLink()}
+                              src={getVideoSrc()}
                               controls
                               autoPlay
                               onLoadedMetadata={handleLoadedMetadata}
@@ -736,39 +841,113 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                             <div className="text-center space-y-2">
                               <span className="text-lg text-white font-semibold">Готово к трансляции!</span>
                               <p className="text-sm text-gray-400 max-w-md">
-                                Торрент успешно кэшируется в TorrServer. Вы можете смотреть его во встроенном плеере или открыть во внешнем.
+                                Торрент успешно кэшируется в TorrServer. Вы можете запустить его во встроенном плеере или открыть во внешнем.
                               </p>
                             </div>
 
-                            <div className="flex flex-wrap gap-4 justify-center">
+                            <div className="flex justify-center">
                               {/* Во встроенном плеере */}
                               <button
                                 onClick={() => setIsPlaying(true)}
                                 className="px-6 py-2.5 bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white font-bold rounded-lg flex items-center space-x-2 transition duration-300 shadow-[0_0_15px_rgba(168,85,247,0.4)]"
                               >
                                 <span>▶</span>
-                                <span>Смотреть здесь</span>
+                                <span>Смотреть во встроенном плеере</span>
                               </button>
+                            </div>
+                          </div>
+                        )}
 
-                              {/* Открыть во внешнем плеере */}
-                              <a
-                                href={getVlcLink()}
-                                className="px-6 py-2.5 bg-white/5 hover:bg-white/10 text-white font-bold rounded-lg flex items-center space-x-2 border border-white/10 transition duration-300"
-                              >
-                                <span>🧡</span>
-                                <span>Открыть в VLC</span>
-                              </a>
+                        {/* Панель управления внешним плеером и ссылками — доступна ВСЕГДА */}
+                        <div className="flex flex-wrap gap-4 justify-center bg-[#0b0c15]/60 border border-white/5 p-4 rounded-xl">
+                          <a
+                            href={getVlcLink()}
+                            className="px-6 py-2.5 bg-gradient-to-r from-[#f26522] to-amber-600 hover:from-[#d85215] hover:to-amber-500 text-white font-bold rounded-lg flex items-center space-x-2 transition duration-300 shadow-[0_0_15px_rgba(242,101,34,0.3)] text-xs"
+                          >
+                            <span>🧡</span>
+                            <span>Открыть в VLC</span>
+                          </a>
 
-                              {/* Скопировать ссылку */}
-                              <button
-                                onClick={() => {
-                                    navigator.clipboard.writeText(getStreamLink());
-                                    alert("Ссылка на видеопоток скопирована в буфер обмена!");
-                                  }}
-                                className="px-4 py-2.5 bg-transparent hover:bg-white/5 text-gray-400 hover:text-white rounded-lg border border-white/5 transition duration-300 text-sm"
-                              >
-                                Скопировать ссылку
-                              </button>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(getStreamLink());
+                              alert("Ссылка на поток скопирована!");
+                            }}
+                            className="px-6 py-2.5 bg-white/5 hover:bg-white/10 text-white font-bold rounded-lg flex items-center space-x-2 border border-white/10 transition duration-300 text-xs"
+                          >
+                            <span>📋</span>
+                            <span>Скопировать ссылку на поток</span>
+                          </button>
+
+                          {isPlaying && (
+                            <button
+                              onClick={() => setIsPlaying(false)}
+                              className="px-6 py-2.5 bg-red-950/20 hover:bg-red-950/40 border border-red-500/30 text-red-400 hover:text-red-300 font-bold rounded-lg transition duration-300 text-xs"
+                            >
+                              Остановить плеер
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Панель живой обратной связи (прогресс буферизации, скорость, пиры) */}
+                        {torrTorrent && (
+                          <div className="bg-[#0b0c15]/60 border border-white/5 p-4 rounded-xl space-y-3 shadow-[0_0_15px_rgba(168,85,247,0.05)] animate-fade-in text-white">
+                            <div className="flex justify-between items-center text-xs">
+                              <span className="text-gray-400 font-medium flex items-center space-x-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-violet-500 animate-ping mr-1 inline-block" />
+                                <span>Обратная связь с TorrServer:</span>
+                              </span>
+                              <span className="font-extrabold text-violet-400 uppercase tracking-wider text-xxs bg-violet-950/40 px-2 py-0.5 rounded border border-violet-800/30">
+                                {torrTorrent.stat_string || "Подключение..."}
+                                {torrTorrent.stat === 4 && torrTorrent.size > 0 && ` (${Math.round(((torrTorrent.loaded_size || 0) / torrTorrent.size) * 100)}%)`}
+                              </span>
+                            </div>
+
+                            {/* Прогресс-бар буферизации/скачивания */}
+                            {torrTorrent.size > 0 && (
+                              <div className="w-full bg-white/5 rounded-full h-1.5 overflow-hidden">
+                                <div
+                                  className="bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-500 h-1.5 transition-all duration-500"
+                                  style={{ width: `${Math.min(100, Math.round(((torrTorrent.loaded_size || 0) / torrTorrent.size) * 100))}%` }}
+                                />
+                              </div>
+                            )}
+
+                            <div className="flex justify-between items-center text-xxs text-gray-400">
+                              <span>Скорость: <strong className="text-green-400 font-bold">{formatSpeed(torrTorrent.download_speed)}</strong></span>
+                              <span>Активные пиры: <strong className="text-violet-300 font-bold">{torrTorrent.active_peers || 0} / {torrTorrent.total_peers || 0}</strong></span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Предупреждение об аудиодорожке */}
+                        {hasUnsupportedAudio() && (
+                          <div className="bg-amber-500/10 border border-amber-500/20 px-4 py-3.5 rounded-xl text-xs text-amber-300 flex flex-col space-y-3 shadow-[0_0_15px_rgba(245,158,11,0.05)] animate-fade-in">
+                            <div className="flex items-center space-x-3">
+                              <span className="text-lg">⚠️</span>
+                              <span>
+                                <strong>Внимание:</strong> Этот торрент содержит аудиодорожку (EAC3/DDP/DTS/Dolby), которая <strong>не поддерживается браузерами нативно</strong>.
+                              </span>
+                            </div>
+                            
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pt-2.5 border-t border-amber-500/15 gap-2">
+                              <label className="flex items-center space-x-2.5 cursor-pointer select-none">
+                                <input
+                                  type="checkbox"
+                                  checked={transcodeAudio}
+                                  onChange={(e) => setTranscodeAudio(e.target.checked)}
+                                  className="rounded border-amber-500/30 text-amber-500 focus:ring-amber-500/50 bg-black/40 w-4 h-4 cursor-pointer"
+                                />
+                                <span className="font-semibold text-gray-200 hover:text-white transition duration-200">
+                                  🔧 Транскодировать звук на сервере (на лету)
+                                </span>
+                              </label>
+                              
+                              {transcodeAudio && (
+                                <span className="text-xxs text-amber-400/80 italic sm:text-right">
+                                  *Перемотка во встроенном плеере будет отключена
+                                </span>
+                              )}
                             </div>
                           </div>
                         )}

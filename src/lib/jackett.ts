@@ -90,6 +90,62 @@ export async function searchTorrents(query: string): Promise<TorrentResult[]> {
   }
 }
 
+// Поиск торрентов через публичный парсер JacRed (jacred.su / jacred.xyz)
+export async function searchJacred(query: string): Promise<TorrentResult[]> {
+  const domains = ["https://jacred.su", "https://jacred.xyz", "http://jacred.xyz"];
+  const categories = "2000,2010,2020,2030,2040,2045,2050,2060,5000,5030,5040";
+
+  for (const domain of domains) {
+    const searchParams = new URLSearchParams({
+      Query: query,
+      Category: categories,
+    });
+    const url = `${domain}/api/v2.0/indexers/all/results?${searchParams.toString()}`;
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000); // 4 секунды таймаут
+
+      const res = await fetch(url, {
+        signal: controller.signal,
+        next: { revalidate: 30 },
+      });
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        console.warn(`[JacRed] Search on ${domain} failed: ${res.statusText}`);
+        continue;
+      }
+
+      const data = await res.json();
+      const results = data.Results || [];
+      if (results.length === 0) {
+        continue;
+      }
+
+      return results.map((item: any) => {
+        const { quality, isHdr } = parseQuality(item.Title);
+        return {
+          title: item.Title,
+          tracker: `${item.Tracker} (JacRed)`,
+          size: item.Size,
+          sizeHuman: formatSize(item.Size),
+          seeders: item.Seeders || 0,
+          peers: item.Peers || 0,
+          downloadUrl: item.Link,
+          magnetUrl: item.MagnetUri || null,
+          quality,
+          isHdr,
+        };
+      });
+    } catch (error) {
+      console.warn(`[JacRed] Fetch error on ${domain}:`, error);
+    }
+  }
+
+  return [];
+}
+
 export async function searchTorrentsMulti(
   title: string,
   originalTitle: string,
@@ -111,9 +167,12 @@ export async function searchTorrentsMulti(
 
   console.log(`[Jackett Multi Search] Queries: ${JSON.stringify(queries)}`);
 
-  // 2. Выполняем запросы параллельно
+  // 2. Выполняем запросы параллельно к Jackett и JacRed
   try {
-    const searchPromises = queries.map((q) => searchTorrents(q));
+    const searchPromises = queries.flatMap((q) => [
+      searchTorrents(q),
+      searchJacred(q),
+    ]);
     const allResultsArrays = await Promise.all(searchPromises);
 
     // 3. Объединяем и дедуплицируем результаты

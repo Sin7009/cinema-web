@@ -14,6 +14,16 @@ export interface TorrTorrent {
   data: string;
   timestamp: number;
   file_list?: TorrFile[];
+  
+  // Динамические поля статуса воспроизведения/загрузки
+  stat?: number;
+  stat_string?: string;
+  download_speed?: number;
+  upload_speed?: number;
+  active_peers?: number;
+  total_peers?: number;
+  loaded_size?: number;
+  size?: number;
 }
 
 async function requestTorrServer(endpoint: string, body: any) {
@@ -85,7 +95,17 @@ function mapTorrentResponse(data: any): TorrTorrent | null {
     category: data.category || "",
     data: data.data || "",
     timestamp: data.timestamp || 0,
-    file_list: file_list.length > 0 ? file_list : undefined
+    file_list: file_list.length > 0 ? file_list : undefined,
+    
+    // Динамические поля
+    stat: data.stat,
+    stat_string: data.stat_string,
+    download_speed: data.download_speed,
+    upload_speed: data.upload_speed,
+    active_peers: data.active_peers,
+    total_peers: data.total_peers,
+    loaded_size: data.loaded_size,
+    size: data.size
   };
 }
 
@@ -169,10 +189,11 @@ export async function getTorrent(hash: string): Promise<TorrTorrent | null> {
   return mapTorrentResponse(data);
 }
 
-// Получить плейлист m3u для внешнего плеера
-export function getStreamUrl(hash: string, fileId: number): string {
-  // Используем внешний публичный домен для вещания на клиенте
-  return `https://torserv.nas-soft.com/stream/play?hash=${hash}&id=${fileId}`;
+// Получить ссылку на поток для воспроизведения
+export function getStreamUrl(hash: string, fileId: number, filename?: string): string {
+  const name = filename ? encodeURIComponent(filename) : "video.mkv";
+  // Используем внешний публичный домен для вещания на клиенте с новым форматом API TorrServer Matrix
+  return `https://torserv.nas-soft.com/stream/${name}?link=${hash}&index=${fileId}&play`;
 }
 
 // Получить список всех торрентов в TorrServer
@@ -187,3 +208,58 @@ export async function listTorrents(): Promise<TorrTorrent[]> {
   }
   return [];
 }
+
+export interface TorrStatus {
+  active: boolean;
+  title: string | null;
+  downloadSpeed: number;
+  uploadSpeed: number;
+  activePeers: number;
+  totalPeers: number;
+  progress: number;
+  statString: string | null;
+}
+
+export async function getTorrServerStatus(): Promise<TorrStatus> {
+  try {
+    const data = await requestTorrServer("/torrents", { action: "list" });
+    if (!Array.isArray(data)) {
+      return { active: false, title: null, downloadSpeed: 0, uploadSpeed: 0, activePeers: 0, totalPeers: 0, progress: 0, statString: null };
+    }
+
+    // Ищем торрент, который активно стримится или скачивается (скорость > 0 или статус downloading/metadata)
+    let activeTorrent = data.find((t: any) => t.download_speed > 0 || (t.stat >= 1 && t.stat <= 4));
+
+    if (activeTorrent) {
+      const size = activeTorrent.size || 0;
+      const loaded = activeTorrent.loaded_size || 0;
+      const progress = size > 0 ? Math.round((loaded / size) * 100) : 0;
+
+      return {
+        active: true,
+        title: activeTorrent.title || "Без названия",
+        downloadSpeed: activeTorrent.download_speed || 0,
+        uploadSpeed: activeTorrent.upload_speed || 0,
+        activePeers: activeTorrent.active_peers || 0,
+        totalPeers: activeTorrent.total_peers || 0,
+        progress: progress,
+        statString: activeTorrent.stat_string || null
+      };
+    }
+
+    return {
+      active: false,
+      title: null,
+      downloadSpeed: 0,
+      uploadSpeed: 0,
+      activePeers: 0,
+      totalPeers: 0,
+      progress: 0,
+      statString: null
+    };
+  } catch (e) {
+    console.error("Error in getTorrServerStatus:", e);
+    return { active: false, title: null, downloadSpeed: 0, uploadSpeed: 0, activePeers: 0, totalPeers: 0, progress: 0, statString: null };
+  }
+}
+
