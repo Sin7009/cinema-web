@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import crypto from "crypto";
+import { TorrentResult } from "./jackett";
 
 const CACHE_DIR = process.env.CACHE_DIR || "/app/cache";
 const TORRENTS_DIR = path.join(CACHE_DIR, "torrents");
@@ -44,7 +45,7 @@ export async function getOrDownloadTorrentFile(url: string): Promise<Buffer | nu
     const data = await fs.readFile(filePath);
     console.log(`[Torrent File Cache Hit] Served from: ${filePath} (URL: ${url})`);
     return data;
-  } catch (e) {
+  } catch {
     // Файл не найден, продолжаем к скачиванию
   }
 
@@ -77,7 +78,7 @@ export async function getOrDownloadTorrentFile(url: string): Promise<Buffer | nu
 
 interface SearchCacheEntry {
   timestamp: number;
-  results: any[];
+  results: TorrentResult[];
 }
 
 interface SearchCache {
@@ -100,7 +101,7 @@ async function readSearchCache(): Promise<SearchCache> {
     const safeObj = Object.create(null);
     Object.assign(safeObj, parsed);
     return safeObj;
-  } catch (e) {
+  } catch {
     return Object.create(null);
   }
 }
@@ -124,7 +125,7 @@ async function writeSearchCache(cache: SearchCache): Promise<void> {
 /**
  * Получить результаты поиска из персистентного кэша
  */
-export async function getCachedSearchResults(key: string): Promise<any[] | null> {
+export async function getCachedSearchResults(key: string): Promise<TorrentResult[] | null> {
   const cache = await readSearchCache();
   const normalizedKey = key.toLowerCase().trim();
   
@@ -149,7 +150,7 @@ export async function getCachedSearchResults(key: string): Promise<any[] | null>
 /**
  * Сохранить результаты поиска в персистентный кэш
  */
-export async function setCachedSearchResults(key: string, results: any[]): Promise<void> {
+export async function setCachedSearchResults(key: string, results: TorrentResult[]): Promise<void> {
   const cache = await readSearchCache();
   const normalizedKey = key.toLowerCase().trim();
 

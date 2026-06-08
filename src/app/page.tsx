@@ -1,29 +1,31 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import React, { useState, useEffect } from "react";
-import Header from "@/components/Header";
+import Header, { User } from "@/components/Header";
 import HeroBanner from "@/components/HeroBanner";
-import MovieRow from "@/components/MovieRow";
+import MovieRow, { MovieItem } from "@/components/MovieRow";
 import MovieModal from "@/components/MovieModal";
 
 export default function Home() {
   const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
 
   // Списки фильмов
-  const [trending, setTrending] = useState<any[]>([]);
-  const [popular, setPopular] = useState<any[]>([]);
-  const [topRated, setTopRated] = useState<any[]>([]);
-  const [continueWatching, setContinueWatching] = useState<any[]>([]);
-  const [torrserverMovies, setTorrserverMovies] = useState<any[]>([]);
+  const [trending, setTrending] = useState<MovieItem[]>([]);
+  const [popular, setPopular] = useState<MovieItem[]>([]);
+  const [topRated, setTopRated] = useState<MovieItem[]>([]);
+  const [continueWatching, setContinueWatching] = useState<MovieItem[]>([]);
+  const [torrserverMovies, setTorrserverMovies] = useState<MovieItem[]>([]);
+  const [heroMovie, setHeroMovie] = useState<MovieItem | null>(null);
 
   // Поиск
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchResults, setSearchResults] = useState<MovieItem[]>([]);
   const [searching, setSearching] = useState(false);
 
   // Модалка
-  const [selectedMovie, setSelectedMovie] = useState<any | null>(null);
+  const [selectedMovie, setSelectedMovie] = useState<MovieItem | null>(null);
 
   // 1. Загрузка сессии и фильмов при монтировании
   useEffect(() => {
@@ -40,18 +42,24 @@ export default function Home() {
         const tmdbRes = await fetch("/api/movies/trending");
         if (tmdbRes.ok) {
           const tmdbData = await tmdbRes.json();
-          setTrending(tmdbData.trending || []);
+          const trendList: MovieItem[] = tmdbData.trending || [];
+          setTrending(trendList);
           setPopular(tmdbData.popular || []);
           setTopRated(tmdbData.topRated || []);
+          
+          if (trendList.length > 0) {
+            const randIdx = Math.floor(Math.random() * Math.min(trendList.length, 5));
+            setHeroMovie(trendList[randIdx]);
+          }
         }
 
         // Загрузка торрентов из TorrServer
         const torrRes = await fetch("/api/torrents/list");
         if (torrRes.ok) {
           const torrData = await torrRes.json();
-          const items = torrData.items || [];
+          const items: MovieItem[] = torrData.items || [];
           // Сортируем по дате добавления (timestamp) по убыванию
-          const sorted = [...items].sort((a: any, b: any) => b.timestamp - a.timestamp);
+          const sorted = [...items].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
           setContinueWatching(sorted.slice(0, 5)); // Последние 5 запущенных
           setTorrserverMovies(sorted);
         }
@@ -88,9 +96,7 @@ export default function Home() {
     return () => clearTimeout(delayDebounceId);
   }, [searchQuery]);
 
-  const handleLogout = () => {
-    // В локальной версии без авторизации кнопка выхода отсутствует
-  };
+
 
   // Экран загрузки
   if (loading) {
@@ -115,7 +121,6 @@ export default function Home() {
         user={user}
         searchQuery={searchQuery}
         setSearchQuery={setSearchQuery}
-        onLogout={handleLogout}
       />
 
       {/* Если в поиске что-то введено, показываем сетку результатов */}
@@ -151,9 +156,8 @@ export default function Home() {
                       {movie.title || movie.name || movie.original_title || movie.original_name || "Без названия"}
                     </p>
                     <p className="text-xxs text-gray-400 mt-0.5">
-                      {movie.release_date || movie.first_air_date
-                        ? new Date(movie.release_date || movie.first_air_date).getFullYear()
-                        : ""}
+                      {movie.release_date ? new Date(movie.release_date).getFullYear() : 
+                       movie.first_air_date ? new Date(movie.first_air_date).getFullYear() : ""}
                     </p>
                   </div>
                 </div>
@@ -166,7 +170,7 @@ export default function Home() {
         <div className="space-y-12">
           {/* Случайный фильм недели на HeroBanner */}
           <HeroBanner
-            movie={trending[Math.floor(Math.random() * Math.min(trending.length, 5))] || null}
+            movie={heroMovie}
             onMovieClick={setSelectedMovie}
           />
 

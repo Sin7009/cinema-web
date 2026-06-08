@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTVShowExternalIds, getMovieDetails } from "@/lib/tmdb";
 
 // Парсинг сезона и серии из названия файла
-function parseSeasonEpisode(filename: string, title?: string): { season: number; episode: number } {
+function parseSeasonEpisode(filename: string): { season: number; episode: number } {
   const cleanName = filename.toLowerCase();
   
   // 1. Паттерны вида S01E02, s1e2, s01.e02, S01E02-E03
@@ -65,8 +65,8 @@ async function fetchMalIdFromAniList(title: string): Promise<number | null> {
       const json = await res.json();
       return json.data?.Media?.idMal || null;
     }
-  } catch (e) {
-    console.error("Failed to fetch MAL ID from AniList:", e);
+  } catch (_e) {
+    console.error("Failed to fetch MAL ID from AniList:", _e);
   }
   return null;
 }
@@ -100,8 +100,8 @@ async function fetchSkipTimesFromAniSkip(malId: number, episode: number, duratio
         return { intro, outro };
       }
     }
-  } catch (e) {
-    console.error("Failed to fetch skip times from AniSkip:", e);
+  } catch (_e) {
+    console.error("Failed to fetch skip times from AniSkip:", _e);
   }
   return null;
 }
@@ -129,8 +129,8 @@ async function fetchSkipTimesFromIntroDB(imdbId: string, season: number, episode
       }
       return { intro, outro };
     }
-  } catch (e) {
-    console.error("Failed to fetch skip times from IntroDB:", e);
+  } catch (_e) {
+    console.error("Failed to fetch skip times from IntroDB:", _e);
   }
   return null;
 }
@@ -144,8 +144,8 @@ async function getImdbId(tmdbId: string, mediaType: string): Promise<string | nu
       const movie = await getMovieDetails(tmdbId);
       return movie?.imdb_id || null;
     }
-  } catch (e) {
-    console.error("Failed to get IMDb ID from TMDB:", e);
+  } catch (_e) {
+    console.error("Failed to get IMDb ID from TMDB:", _e);
   }
   return null;
 }
@@ -203,7 +203,8 @@ export async function GET(req: NextRequest) {
       outro,
       provider: malId && (intro || outro) ? "AniSkip" : "IntroDB"
     });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Internal Server Error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

@@ -14,6 +14,16 @@ export interface TorrentResult {
   isHdr: boolean;
 }
 
+export interface JackettResultItem {
+  Title: string;
+  Tracker: string;
+  Size: number;
+  Seeders?: number;
+  Peers?: number;
+  Link: string;
+  MagnetUri?: string | null;
+}
+
 function parseQuality(title: string): { quality: string; isHdr: boolean } {
   const lower = title.toLowerCase();
   let quality = "SD";
@@ -67,8 +77,8 @@ export async function searchTorrents(query: string): Promise<TorrentResult[]> {
     const data = await res.json();
     const results = data.Results || [];
 
-    return results
-      .map((item: any) => {
+    return (results as JackettResultItem[])
+      .map((item: JackettResultItem) => {
         const { quality, isHdr } = parseQuality(item.Title);
         return {
           title: item.Title,
@@ -123,7 +133,7 @@ export async function searchJacred(query: string): Promise<TorrentResult[]> {
         continue;
       }
 
-      return results.map((item: any) => {
+      return (results as JackettResultItem[]).map((item: JackettResultItem) => {
         const { quality, isHdr } = parseQuality(item.Title);
         return {
           title: item.Title,

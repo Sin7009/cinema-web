@@ -128,8 +128,9 @@ export async function GET(req: NextRequest) {
     }
 
     return NextResponse.json({ results: filteredResults, cached: false });
-  } catch (error: any) {
+  } catch (error) {
     console.error("Error in torrent search API route:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const message = error instanceof Error ? error.message : "Internal Server Error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

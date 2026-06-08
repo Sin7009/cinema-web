@@ -26,7 +26,26 @@ export interface TorrTorrent {
   size?: number;
 }
 
-async function requestTorrServer(endpoint: string, body: any) {
+interface TorrServerResponse {
+  hash?: string;
+  title?: string;
+  poster?: string;
+  category?: string;
+  data?: string;
+  timestamp?: number;
+  stat?: number;
+  stat_string?: string;
+  download_speed?: number;
+  upload_speed?: number;
+  active_peers?: number;
+  total_peers?: number;
+  loaded_size?: number;
+  size?: number;
+  file_stats?: Array<{ id: number; path: string; length?: number; size?: number }>;
+  file_list?: Array<{ id: number; path: string; length?: number; size?: number }>;
+}
+
+async function requestTorrServer(endpoint: string, body: Record<string, unknown>) {
   try {
     const res = await fetch(`${TORRSERVER_API_URL}${endpoint}`, {
       method: "POST",
@@ -50,14 +69,14 @@ async function requestTorrServer(endpoint: string, body: any) {
 }
 
 // Вспомогательная функция для маппинга ответа TorrServer и извлечения списка файлов
-function mapTorrentResponse(data: any): TorrTorrent | null {
+function mapTorrentResponse(data: TorrServerResponse | null): TorrTorrent | null {
   if (!data) return null;
 
   let file_list: TorrFile[] = [];
 
   // 1. Проверяем file_stats (основной источник для запущенных/активных торрентов)
   if (Array.isArray(data.file_stats)) {
-    file_list = data.file_stats.map((f: any) => ({
+    file_list = data.file_stats.map((f) => ({
       id: f.id,
       path: f.path,
       size: f.length || f.size || 0
@@ -65,7 +84,7 @@ function mapTorrentResponse(data: any): TorrTorrent | null {
   }
   // 2. Проверяем file_list (для обратной совместимости)
   else if (Array.isArray(data.file_list)) {
-    file_list = data.file_list.map((f: any) => ({
+    file_list = data.file_list.map((f) => ({
       id: f.id,
       path: f.path,
       size: f.size || f.length || 0
@@ -77,13 +96,13 @@ function mapTorrentResponse(data: any): TorrTorrent | null {
       const parsedData = JSON.parse(data.data);
       const files = parsedData?.TorrServer?.Files;
       if (Array.isArray(files)) {
-        file_list = files.map((f: any) => ({
+        file_list = files.map((f: { id: number; path: string; length?: number; size?: number }) => ({
           id: f.id,
           path: f.path,
           size: f.length || f.size || 0
         }));
       }
-    } catch (e) {
+    } catch {
       // Игнорируем ошибки парсинга
     }
   }
@@ -228,7 +247,7 @@ export async function getTorrServerStatus(): Promise<TorrStatus> {
     }
 
     // Ищем торрент, который активно стримится или скачивается (скорость > 0 или статус downloading/metadata)
-    let activeTorrent = data.find((t: any) => t.download_speed > 0 || (t.stat >= 1 && t.stat <= 4));
+    const activeTorrent = (data as TorrServerResponse[]).find((t) => (t.download_speed || 0) > 0 || ((t.stat || 0) >= 1 && (t.stat || 0) <= 4));
 
     if (activeTorrent) {
       const size = activeTorrent.size || 0;
@@ -257,8 +276,8 @@ export async function getTorrServerStatus(): Promise<TorrStatus> {
       progress: 0,
       statString: null
     };
-  } catch (e) {
-    console.error("Error in getTorrServerStatus:", e);
+  } catch {
+    console.error("Error in getTorrServerStatus");
     return { active: false, title: null, downloadSpeed: 0, uploadSpeed: 0, activePeers: 0, totalPeers: 0, progress: 0, statString: null };
   }
 }

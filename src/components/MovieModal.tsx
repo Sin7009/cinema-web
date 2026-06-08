@@ -1,7 +1,12 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
+import Hls from "hls.js";
 import { TorrentResult } from "@/lib/jackett";
+import { MovieItem } from "./MovieRow";
+import { TorrTorrent, TorrFile } from "@/lib/torrserver";
+import { db } from "@/lib/indexedDb";
 
 function parseSeasonNumber(filePath: string): number {
   const parts = filePath.split("/");
@@ -50,30 +55,45 @@ function isVideoFile(filePath: string): boolean {
   return !!ext && ["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "ts", "m4v", "mpeg", "mpg"].includes(ext);
 }
 
-interface MovieModalProps {
-  movie: any;
-  onClose: () => void;
-  plexAuthToken?: string;
-  plexServerUrl?: string;
+interface Genre {
+  name: string;
 }
 
-export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUrl }: MovieModalProps) {
+interface CastActor {
+  name: string;
+}
+
+interface MovieDetails {
+  overview?: string;
+  genres?: Genre[];
+  credits?: {
+    cast?: CastActor[];
+  };
+  imdb_id?: string;
+}
+
+interface MovieModalProps {
+  movie: MovieItem;
+  onClose: () => void;
+}
+
+export default function MovieModal({ movie, onClose }: MovieModalProps) {
   const [activeTab, setActiveTab] = useState<"info" | "torrents" | "watch">("info");
-  const [details, setDetails] = useState<any>(null);
-  const [loadingDetails, setLoadingDetails] = useState(false);
+  const [details, setDetails] = useState<MovieDetails | null>(null);
   const [torrents, setTorrents] = useState<TorrentResult[]>([]);
   const [loadingTorrents, setLoadingTorrents] = useState(false);
   
   // Состояния выбора торрента и файлов в TorrServer
   const [addingTorrent, setAddingTorrent] = useState(false);
-  const [torrTorrent, setTorrTorrent] = useState<any>(null);
+  const [torrTorrent, setTorrTorrent] = useState<TorrTorrent | null>(null);
   const [selectedFileId, setSelectedFileId] = useState<number | null>(null);
   const [currentSeason, setCurrentSeason] = useState<number | null>(null);
+  const lastSavedTimeRef = useRef<number>(0);
 
   // Обёртка для фильтрации не-видео файлов
-  const setFilteredTorrTorrent = (torrent: any) => {
+  const setFilteredTorrTorrent = (torrent: TorrTorrent | null) => {
     if (torrent && Array.isArray(torrent.file_list)) {
-      torrent.file_list = torrent.file_list.filter((f: any) => isVideoFile(f.path));
+      torrent.file_list = torrent.file_list.filter((f: TorrFile) => isVideoFile(f.path));
     }
     setTorrTorrent(torrent);
   };
@@ -82,7 +102,11 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
   const [isPlaying, setIsPlaying] = useState(false);
   const [showSkipIntro, setShowSkipIntro] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [transcodeAudio, setTranscodeAudio] = useState(true);
+
+  // Автоматическое транскодирование HLS
+  const [shouldTranscode, setShouldTranscode] = useState(false);
+  const [probingAudio, setProbingAudio] = useState(false);
+  const [videoDuration, setVideoDuration] = useState<number | null>(null);
 
   // Состояния автоматического пропуска титров и заставок
   const [skipTimes, setSkipTimes] = useState<{
@@ -144,7 +168,6 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
   // 1. Загрузка подробной информации о фильме или сериале
   useEffect(() => {
     async function loadDetails() {
-      setLoadingDetails(true);
       try {
         if (!isTorrTorrent) {
           const endpoint = isTvShow ? `/api/tv/${movieId}` : `/api/movies/${movieId}`;
@@ -163,12 +186,10 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
         }
       } catch (e) {
         console.error(e);
-      } finally {
-        setLoadingDetails(false);
       }
     }
     loadDetails();
-  }, [movieId, isTorrTorrent, isTvShow]);
+  }, [movieId, isTorrTorrent, isTvShow, movie.stat_string]);
 
   // 1.2. Автозагрузка деталей торрента из TorrServer по хэшу
   useEffect(() => {
@@ -179,9 +200,11 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
           if (res.ok) {
             const data = await res.json();
             setFilteredTorrTorrent(data.torrent);
-            const files = data.torrent.file_list ? data.torrent.file_list.filter((f: any) => isVideoFile(f.path)) : [];
+            const files = data.torrent.file_list ? data.torrent.file_list.filter((f: TorrFile) => isVideoFile(f.path)) : [];
             if (files.length === 1) {
               setSelectedFileId(files[0].id);
+              const season = parseSeasonNumber(files[0].path);
+              setCurrentSeason(season);
             }
             setActiveTab("watch"); // Сразу переходим во вкладку воспроизведения
           }
@@ -224,8 +247,6 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
   useEffect(() => {
     if (activeTab !== "watch" || !torrTorrent?.hash) return;
 
-    let intervalId: NodeJS.Timeout | undefined;
-
     const pollTorrentDetails = async () => {
       try {
         const res = await fetch(`/api/torrents/get?hash=${torrTorrent.hash}`);
@@ -236,11 +257,13 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
             
             // Если файлы загрузились впервые и никакой файл не выбран, выберем первый и запустим плеер
             if (data.torrent.file_list && data.torrent.file_list.length > 0) {
-              const files = data.torrent.file_list.filter((f: any) => isVideoFile(f.path));
+              const files = data.torrent.file_list.filter((f: TorrFile) => isVideoFile(f.path));
               if (files.length > 0) {
                 setSelectedFileId(prev => {
                   if (prev === null) {
                     setIsPlaying(true); // Автостарт встроенного плеера при автовыборе файла
+                    const season = parseSeasonNumber(files[0].path);
+                    setCurrentSeason(season);
                     return files[0].id;
                   }
                   return prev;
@@ -255,44 +278,112 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
     };
 
     pollTorrentDetails();
-    intervalId = setInterval(pollTorrentDetails, 3000); // Опрашиваем раз в 3 секунды для живого статуса скорости и пиров
+    const intervalId = setInterval(pollTorrentDetails, 3000); // Опрашиваем раз в 3 секунды для живого статуса скорости и пиров
 
     return () => {
-      if (intervalId) clearInterval(intervalId);
+      clearInterval(intervalId);
     };
   }, [activeTab, torrTorrent?.hash]);
 
-  // Эффект принудительного воспроизведения при монтировании/изменении видеоплеера
+  // Фоновый ffprobe-запрос при выборе файла
   useEffect(() => {
-    if (isPlaying && videoRef.current) {
-      const playVideo = async () => {
-        try {
-          await videoRef.current?.play();
-        } catch (err) {
-          console.log("Autoplay was prevented by browser, waiting for user interaction:", err);
+    if (selectedFileId === null || !torrTorrent) return;
+    const hash = torrTorrent.hash;
+
+    async function checkAudioSupport() {
+      setProbingAudio(true);
+      // По умолчанию предполагаем, что нужно транскодировать (для безопасности звука, если ffprobe не успеет)
+      setShouldTranscode(true);
+      setVideoDuration(null);
+      try {
+        const res = await fetch(`/api/stream/transcode?link=${hash}&index=${selectedFileId}&probe=true`);
+        if (res.ok) {
+          const data = await res.json();
+          setShouldTranscode(data.shouldTranscode);
+          if (data.duration > 0) {
+            setVideoDuration(data.duration);
+          }
+        } else {
+          console.warn("Failed to probe audio tracks (HTTP error), fallback to transcode");
+          setShouldTranscode(true);
         }
-      };
-      playVideo();
-    }
-  }, [isPlaying, selectedFileId, torrTorrent?.hash]);
-
-
-  // Автоматическая синхронизация выбранного сезона при смене активного файла
-  useEffect(() => {
-    if (torrTorrent && torrTorrent.file_list && selectedFileId !== null) {
-      const activeFile = torrTorrent.file_list.find((f: any) => f.id === selectedFileId);
-      if (activeFile) {
-        const season = parseSeasonNumber(activeFile.path);
-        setCurrentSeason(season);
+      } catch (err) {
+        console.error("Failed to probe audio tracks, fallback to transcode:", err);
+        setShouldTranscode(true);
+      } finally {
+        setProbingAudio(false);
       }
     }
-  }, [selectedFileId, torrTorrent]);
+
+    checkAudioSupport();
+  }, [selectedFileId, torrTorrent?.hash]);
+
+  // Эффект инициализации источника видео (нативный VOD или HLS)
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !isPlaying || probingAudio) return;
+
+    const src = getVideoSrc();
+    if (!src) return;
+
+    let hls: Hls | null = null;
+
+    if (shouldTranscode) {
+      if (Hls.isSupported()) {
+        hls = new Hls({
+          enableWorker: true,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 60,
+        });
+
+        hls.loadSource(src);
+        hls.attachMedia(video);
+
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          video.play().catch(() => {});
+        });
+
+        hls.on(Hls.Events.ERROR, (event, data) => {
+          if (data.fatal) {
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                console.warn("HLS Network error, trying to recover...", data);
+                hls?.startLoad();
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                console.warn("HLS Media error, trying to recover...", data);
+                hls?.recoverMediaError();
+                break;
+              default:
+                console.error("Unrecoverable HLS error", data);
+                break;
+            }
+          }
+        });
+      } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        // Поддержка Safari
+        video.src = src;
+        video.play().catch(() => {});
+      }
+    } else {
+      // Обычный прямой поток (MP4 / MKV)
+      video.src = src;
+      video.play().catch(() => {});
+    }
+
+    return () => {
+      if (hls) {
+        hls.destroy();
+      }
+      video.src = "";
+    };
+  }, [isPlaying, selectedFileId, torrTorrent?.hash, shouldTranscode, probingAudio]);
 
   // Группировка файлов по сезонам
   const groupedFiles = React.useMemo(() => {
     if (!torrTorrent || !torrTorrent.file_list) return {};
-    const groups: { [key: number]: any[] } = {};
-    torrTorrent.file_list.forEach((file: any) => {
+    const groups: { [key: number]: TorrFile[] } = {};
+    torrTorrent.file_list.forEach((file: TorrFile) => {
       const season = parseSeasonNumber(file.path);
       if (!groups[season]) {
         groups[season] = [];
@@ -325,9 +416,11 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
         setFilteredTorrTorrent(data.torrent);
         setActiveTab("watch"); // Всегда переключаемся во вкладку воспроизведения
 
-        const files = data.torrent.file_list ? data.torrent.file_list.filter((f: any) => isVideoFile(f.path)) : [];
+        const files = data.torrent.file_list ? data.torrent.file_list.filter((f: TorrFile) => isVideoFile(f.path)) : [];
         if (files.length > 0) {
           setSelectedFileId(files[0].id); // Выбираем первый файл по умолчанию
+          const season = parseSeasonNumber(files[0].path);
+          setCurrentSeason(season);
           setIsPlaying(true); // Автостарт встроенного плеера
         }
       } else {
@@ -343,9 +436,12 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
   const playNextEpisode = () => {
     if (!torrTorrent || !torrTorrent.file_list || selectedFileId === null) return;
     const files = torrTorrent.file_list;
-    const currentIndex = files.findIndex((f: any) => f.id === selectedFileId);
+    const currentIndex = files.findIndex((f: TorrFile) => f.id === selectedFileId);
     if (currentIndex !== -1 && currentIndex < files.length - 1) {
-      setSelectedFileId(files[currentIndex + 1].id);
+      const nextFile = files[currentIndex + 1];
+      setSelectedFileId(nextFile.id);
+      const season = parseSeasonNumber(nextFile.path);
+      setCurrentSeason(season);
       setIsPlaying(true);
       setShowSkipIntro(false);
       setSkipTimes(null);
@@ -357,36 +453,45 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
     }
   };
 
-  const playNextEpisodeFromEffect = () => {
-    // Вспомогательная функция без alert, чтобы не блокировать UI в асинхронных хэндлерах
-    if (!torrTorrent || !torrTorrent.file_list || selectedFileId === null) return;
-    const files = torrTorrent.file_list;
-    const currentIndex = files.findIndex((f: any) => f.id === selectedFileId);
-    if (currentIndex !== -1 && currentIndex < files.length - 1) {
-      setSelectedFileId(files[currentIndex + 1].id);
-      setIsPlaying(true);
-      setShowSkipIntro(false);
-      setSkipTimes(null);
-      setCancelledSkips([]);
-      setSkipOverlay({ show: false, type: null, countdown: 5 });
-    } else {
-      setIsPlaying(false);
-    }
-  };
-
   const handleLoadedMetadata = async (e: React.SyntheticEvent<HTMLVideoElement>) => {
     const video = e.currentTarget;
     const duration = video.duration;
     if (!duration || duration <= 0) return;
 
     if (!torrTorrent || selectedFileId === null) return;
-    const selectedFile = torrTorrent.file_list.find((f: any) => f.id === selectedFileId);
+    const selectedFile = torrTorrent.file_list?.find((f: TorrFile) => f.id === selectedFileId);
     const filename = selectedFile ? selectedFile.path.split("/").pop() : "";
 
     setLoadingSkipTimes(true);
     setSkipTimes(null);
     setCancelledSkips([]);
     setSkipOverlay({ show: false, type: null, countdown: 5 });
+
+    // Восстанавливаем сохраненный прогресс воспроизведения
+    try {
+      const progress = await db.getProgress(torrTorrent.hash, selectedFileId);
+      if (progress && progress.time > 5 && progress.time < duration - 10) {
+        video.currentTime = progress.time;
+        console.log(`Restored playback position: ${progress.time}s`);
+      }
+    } catch (err) {
+      console.error("Failed to restore playback progress:", err);
+    }
+
+    // Сохраняем запуск просмотра в историю
+    try {
+      await db.addToHistory({
+        id: movie.id ? String(movie.id) : (torrTorrent.hash || ""),
+        title: movieTitle,
+        posterPath: movie.poster_path,
+        backdropPath: movie.backdrop_path,
+        overview: movie.overview || details?.overview || movie.stat_string || "",
+        type: isTvShow ? "tv" : (movie.hash ? "torrent" : "movie"),
+        activeFileId: selectedFileId,
+      });
+    } catch (err) {
+      console.error("Failed to add to watch history:", err);
+    }
 
     try {
       const searchParams = new URLSearchParams({
@@ -418,7 +523,14 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
   const handleTimeUpdate = (e: React.SyntheticEvent<HTMLVideoElement>) => {
     const video = e.currentTarget;
     const currentTime = video.currentTime;
-    if (!video.duration) return;
+    const duration = video.duration;
+    if (!duration) return;
+
+    // Сохраняем прогресс воспроизведения каждые 3 секунды
+    if (torrTorrent && selectedFileId !== null && Math.abs(currentTime - lastSavedTimeRef.current) > 3) {
+      lastSavedTimeRef.current = currentTime;
+      db.saveProgress(torrTorrent.hash, selectedFileId, currentTime, duration);
+    }
 
     // 1. Если загружены точные тайминги автопропуска
     if (skipTimes) {
@@ -465,6 +577,9 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
   };
 
   const handleVideoEnded = () => {
+    if (torrTorrent && selectedFileId !== null) {
+      db.deleteProgress(torrTorrent.hash, selectedFileId);
+    }
     playNextEpisode();
   };
 
@@ -477,7 +592,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
 
   const getStreamLink = () => {
     if (!torrTorrent || selectedFileId === null) return "";
-    const file = torrTorrent.file_list?.find((f: any) => f.id === selectedFileId);
+    const file = torrTorrent.file_list?.find((f: TorrFile) => f.id === selectedFileId);
     const filename = file ? file.path.split("/").pop() : "video.mkv";
     return `https://torserv.nas-soft.com/stream/${encodeURIComponent(filename || "video.mkv")}?link=${torrTorrent.hash}&index=${selectedFileId}&play`;
   };
@@ -490,7 +605,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
 
   const getVideoSrc = () => {
     if (!torrTorrent || selectedFileId === null) return "";
-    if (hasUnsupportedAudio() && transcodeAudio) {
+    if (shouldTranscode) {
       return `/api/stream/transcode?link=${torrTorrent.hash}&index=${selectedFileId}`;
     }
     return getStreamLink();
@@ -502,20 +617,6 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
     if (kbs < 1024) return `${kbs.toFixed(1)} КБ/с`;
     const mbs = kbs / 1024;
     return `${mbs.toFixed(1)} МБ/с`;
-  };
-
-
-  const hasUnsupportedAudio = () => {
-    if (!torrTorrent) return false;
-    let filename = "";
-    if (selectedFileId !== null && torrTorrent.file_list) {
-      const file = torrTorrent.file_list.find((f: any) => f.id === selectedFileId);
-      if (file) filename = file.path.split("/").pop() || "";
-    }
-    const title = (torrTorrent.title || "").toLowerCase();
-    const fileLower = filename.toLowerCase();
-    const audioKeywords = ["eac3", "ddp5", "ddp7", "dd+5", "ddp.5", "dts", "ac3", "truehd", "dolby digital"];
-    return audioKeywords.some(kw => title.includes(kw) || fileLower.includes(kw));
   };
 
 
@@ -608,7 +709,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
 
                 {details?.genres && (
                   <div className="flex flex-wrap gap-2 pt-2">
-                    {details.genres.map((genre: any, idx: number) => (
+                    {details.genres.map((genre: Genre, idx: number) => (
                       <span
                         key={idx}
                         className="px-3 py-1 bg-white/5 border border-white/10 text-xs text-gray-300 rounded-full"
@@ -666,7 +767,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                 <div>
                   <span className="text-gray-500">В ролях:</span>
                   <p className="text-gray-300 mt-1 font-medium">
-                    {details?.credits?.cast?.slice(0, 5).map((a: any) => a.name).join(", ") || "Загрузка..."}
+                    {details?.credits?.cast?.slice(0, 5).map((a: CastActor) => a.name).join(", ") || "Загрузка..."}
                   </p>
                 </div>
                 {movie.vote_average && (
@@ -760,7 +861,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                 {/* Левая колонка: Видеоплеер */}
                 <div className="lg:col-span-2 space-y-4">
                   {selectedFileId !== null && (() => {
-                    const selectedFile = torrTorrent.file_list.find((f: any) => f.id === selectedFileId);
+                    const selectedFile = torrTorrent.file_list?.find((f: TorrFile) => f.id === selectedFileId);
                     const currentFileName = selectedFile ? selectedFile.path.split("/").pop() : "";
                     return (
                       <div className="space-y-4">
@@ -787,7 +888,6 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                           <div className="relative aspect-video w-full bg-black rounded-xl overflow-hidden border border-white/5 shadow-2xl group/player">
                             <video
                               ref={videoRef}
-                              src={getVideoSrc()}
                               controls
                               autoPlay
                               onLoadedMetadata={handleLoadedMetadata}
@@ -899,16 +999,16 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                               </span>
                               <span className="font-extrabold text-violet-400 uppercase tracking-wider text-xxs bg-violet-950/40 px-2 py-0.5 rounded border border-violet-800/30">
                                 {torrTorrent.stat_string || "Подключение..."}
-                                {torrTorrent.stat === 4 && torrTorrent.size > 0 && ` (${Math.round(((torrTorrent.loaded_size || 0) / torrTorrent.size) * 100)}%)`}
+                                {torrTorrent.stat === 4 && (torrTorrent.size || 0) > 0 && ` (${Math.round(((torrTorrent.loaded_size || 0) / (torrTorrent.size || 1)) * 100)}%)`}
                               </span>
                             </div>
 
                             {/* Прогресс-бар буферизации/скачивания */}
-                            {torrTorrent.size > 0 && (
+                            {(torrTorrent.size || 0) > 0 && (
                               <div className="w-full bg-white/5 rounded-full h-1.5 overflow-hidden">
                                 <div
                                   className="bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-500 h-1.5 transition-all duration-500"
-                                  style={{ width: `${Math.min(100, Math.round(((torrTorrent.loaded_size || 0) / torrTorrent.size) * 100))}%` }}
+                                  style={{ width: `${Math.min(100, Math.round(((torrTorrent.loaded_size || 0) / (torrTorrent.size || 1)) * 100))}%` }}
                                 />
                               </div>
                             )}
@@ -920,34 +1020,20 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                           </div>
                         )}
 
-                        {/* Предупреждение об аудиодорожке */}
-                        {hasUnsupportedAudio() && (
-                          <div className="bg-amber-500/10 border border-amber-500/20 px-4 py-3.5 rounded-xl text-xs text-amber-300 flex flex-col space-y-3 shadow-[0_0_15px_rgba(245,158,11,0.05)] animate-fade-in">
+                        {/* Статус аудиодорожки */}
+                        {probingAudio && (
+                          <div className="bg-white/5 border border-white/10 px-4 py-3 rounded-xl text-xs text-gray-400 flex items-center space-x-2 animate-pulse">
+                            <span className="w-2.5 h-2.5 border-2 border-t-violet-500 border-white/10 rounded-full animate-spin inline-block"></span>
+                            <span>Анализ аудиодорожки...</span>
+                          </div>
+                        )}
+                        {!probingAudio && shouldTranscode && (
+                          <div className="bg-amber-500/10 border border-amber-500/20 px-4 py-3.5 rounded-xl text-xs text-amber-300 flex flex-col space-y-1 shadow-[0_0_15px_rgba(245,158,11,0.05)] animate-fade-in">
                             <div className="flex items-center space-x-3">
-                              <span className="text-lg">⚠️</span>
+                              <span className="text-lg">🔧</span>
                               <span>
-                                <strong>Внимание:</strong> Этот торрент содержит аудиодорожку (EAC3/DDP/DTS/Dolby), которая <strong>не поддерживается браузерами нативно</strong>.
+                                Аудиодорожка не поддерживается браузером. <strong>Автоматически включено транскодирование в AAC Stereo.</strong> Перемотка работает через HLS.
                               </span>
-                            </div>
-                            
-                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pt-2.5 border-t border-amber-500/15 gap-2">
-                              <label className="flex items-center space-x-2.5 cursor-pointer select-none">
-                                <input
-                                  type="checkbox"
-                                  checked={transcodeAudio}
-                                  onChange={(e) => setTranscodeAudio(e.target.checked)}
-                                  className="rounded border-amber-500/30 text-amber-500 focus:ring-amber-500/50 bg-black/40 w-4 h-4 cursor-pointer"
-                                />
-                                <span className="font-semibold text-gray-200 hover:text-white transition duration-200">
-                                  🔧 Транскодировать звук на сервере (на лету)
-                                </span>
-                              </label>
-                              
-                              {transcodeAudio && (
-                                <span className="text-xxs text-amber-400/80 italic sm:text-right">
-                                  *Перемотка во встроенном плеере будет отключена
-                                </span>
-                              )}
                             </div>
                           </div>
                         )}
@@ -958,7 +1044,7 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
 
                 {/* Правая колонка: Список файлов (серий) */}
                 <div className="space-y-4">
-                  {torrTorrent.file_list && torrTorrent.file_list.length > 1 && (
+                  {torrTorrent?.file_list && torrTorrent.file_list.length > 1 && (
                     <div className="space-y-3">
                       <span className="text-sm font-bold text-gray-400 block">Список серий:</span>
 
@@ -984,11 +1070,13 @@ export default function MovieModal({ movie, onClose, plexAuthToken, plexServerUr
                       <div className="max-h-[340px] overflow-y-auto border border-white/5 rounded-lg bg-black/40 p-2 space-y-1 scrollbar-thin">
                         {((uniqueSeasons.length > 1 && currentSeason !== null
                           ? groupedFiles[currentSeason]
-                          : torrTorrent.file_list) || []).map((file: any) => (
+                          : torrTorrent.file_list) || []).map((file: TorrFile) => (
                           <div
                             key={file.id}
                             onClick={() => {
                               setSelectedFileId(file.id);
+                              const season = parseSeasonNumber(file.path);
+                              setCurrentSeason(season);
                               if (isPlaying) {
                                 setShowSkipIntro(false);
                               }

@@ -2,10 +2,32 @@
 
 import React, { useRef } from "react";
 
+export interface MovieItem {
+  id?: string | number;
+  ratingKey?: string;
+  hash?: string;
+  title?: string;
+  name?: string;
+  original_title?: string;
+  original_name?: string;
+  poster?: string;
+  poster_path?: string;
+  thumb?: string;
+  release_date?: string;
+  first_air_date?: string;
+  originallyAvailableAt?: string;
+  timestamp?: number;
+  vote_average?: number;
+  media_type?: string;
+  stat_string?: string;
+  backdrop_path?: string;
+  overview?: string;
+}
+
 interface MovieRowProps {
   title: string;
-  movies: any[];
-  onMovieClick: (movie: any) => void;
+  movies: MovieItem[];
+  onMovieClick: (movie: MovieItem) => void;
   plexAuthToken?: string;
   plexServerUrl?: string;
 }
@@ -26,7 +48,7 @@ export default function MovieRow({ title, movies, onMovieClick, plexAuthToken, p
     }
   };
 
-  const getMoviePoster = (movie: any) => {
+  const getMoviePoster = (movie: MovieItem) => {
     // Если это фильм из TorrServer
     if (movie.poster) {
       return movie.poster;
@@ -43,11 +65,11 @@ export default function MovieRow({ title, movies, onMovieClick, plexAuthToken, p
     return "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=300&auto=format&fit=crop";
   };
 
-  const getMovieTitle = (movie: any) => {
+  const getMovieTitle = (movie: MovieItem) => {
     return movie.title || movie.name || movie.original_title || "Без названия";
   };
 
-  const getMovieYear = (movie: any) => {
+  const getMovieYear = (movie: MovieItem) => {
     const dateStr = movie.release_date || movie.first_air_date || movie.originallyAvailableAt || (movie.timestamp ? movie.timestamp * 1000 : null);
     if (dateStr) {
       return new Date(dateStr).getFullYear();
@@ -82,6 +104,7 @@ export default function MovieRow({ title, movies, onMovieClick, plexAuthToken, p
               className="flex-none w-36 sm:w-44 md:w-52 h-52 sm:h-64 md:h-76 relative rounded-md overflow-hidden cursor-pointer transform hover:scale-105 transition duration-300 shadow-lg hover:shadow-black/60 bg-[#1f1f1f]"
             >
               {/* Постер */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={getMoviePoster(movie)}
                 alt={getMovieTitle(movie)}

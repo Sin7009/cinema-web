@@ -1,20 +1,22 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import React from "react";
+import { MovieItem } from "./MovieRow";
 
 interface HeroBannerProps {
-  movie: any;
-  onMovieClick: (movie: any) => void;
+  movie: MovieItem | null;
+  onMovieClick: (movie: MovieItem) => void;
 }
 
 export default function HeroBanner({ movie, onMovieClick }: HeroBannerProps) {
   if (!movie) return null;
 
-  const getMovieTitle = (movie: any) => {
+  const getMovieTitle = (movie: MovieItem) => {
     return movie.title || movie.name || movie.original_title || "Без названия";
   };
 
-  const getMovieOverview = (movie: any) => {
+  const getMovieOverview = (movie: MovieItem) => {
     const text = movie.overview || "";
     if (text.length > 200) {
       return text.substring(0, 200) + "...";

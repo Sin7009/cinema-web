@@ -1,10 +1,17 @@
+/* eslint-disable @next/next/no-img-element */
 import React, { useState, useEffect } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+
+export interface User {
+  username?: string;
+  thumb?: string;
+}
 
 interface HeaderProps {
-  user: any;
+  user: User | null;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
-  onLogout: () => void;
 }
 
 interface TorrStatus {
@@ -18,7 +25,8 @@ interface TorrStatus {
   statString: string | null;
 }
 
-export default function Header({ user, searchQuery, setSearchQuery, onLogout }: HeaderProps) {
+export default function Header({ user, searchQuery, setSearchQuery }: HeaderProps) {
+  const pathname = usePathname();
   const [torrStatus, setTorrStatus] = useState<TorrStatus | null>(null);
   const [isOnline, setIsOnline] = useState<boolean | null>(null); // null = loading, true = online, false = offline
 
@@ -34,7 +42,7 @@ export default function Header({ user, searchQuery, setSearchQuery, onLogout }: 
           setIsOnline(false);
           setTorrStatus(null);
         }
-      } catch (e) {
+      } catch {
         setIsOnline(false);
         setTorrStatus(null);
       }
@@ -59,10 +67,25 @@ export default function Header({ user, searchQuery, setSearchQuery, onLogout }: 
         <h1 className="text-3xl font-black tracking-widest bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-500 bg-clip-text text-transparent cursor-pointer select-none drop-shadow-[0_0_15px_rgba(217,70,239,0.35)] hover:scale-105 transition duration-300">
           SINFLEX
         </h1>
-        <nav className="hidden lg:flex space-x-6 text-sm font-bold text-gray-400">
-          <span className="text-white hover:text-white cursor-pointer transition">Главная</span>
-          <span className="hover:text-white cursor-pointer transition">Фильмы</span>
-          <span className="hover:text-white cursor-pointer transition">Сериалы</span>
+        <nav className="hidden lg:flex space-x-6 text-sm font-bold">
+          <Link
+            href="/"
+            className={`${
+              pathname === "/" ? "text-white" : "text-gray-400 hover:text-white"
+            } cursor-pointer transition`}
+          >
+            Главная
+          </Link>
+          <Link
+            href="/iptv"
+            className={`${
+              pathname === "/iptv" ? "text-white" : "text-gray-400 hover:text-white"
+            } cursor-pointer transition`}
+          >
+            ТВ / IPTV
+          </Link>
+          <span className="text-gray-400 hover:text-white cursor-pointer transition">Фильмы</span>
+          <span className="text-gray-400 hover:text-white cursor-pointer transition">Сериалы</span>
         </nav>
       </div>
 

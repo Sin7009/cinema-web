@@ -26,7 +26,8 @@ export async function POST() {
     const authUrl = `https://app.plex.tv/auth/#!?clientID=${clientIdentifier}&key=${code}&context[device][product]=Cinema%20Web`;
 
     return NextResponse.json({ authUrl, pinId });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Internal Server Error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

@@ -28,12 +28,12 @@ export function decrypt(text: string): string | null {
     let decrypted = decipher.update(encryptedText, undefined, "utf8");
     decrypted += decipher.final("utf8");
     return decrypted;
-  } catch (e) {
+  } catch {
     return null;
   }
 }
 
-export async function setSession(data: Record<string, any>) {
+export async function setSession(data: Record<string, unknown>) {
   const sessionData = JSON.stringify(data);
   const encrypted = encrypt(sessionData);
   const cookieStore = await cookies();
@@ -46,7 +46,7 @@ export async function setSession(data: Record<string, any>) {
   });
 }
 
-export async function getSession(): Promise<Record<string, any> | null> {
+export async function getSession(): Promise<Record<string, unknown> | null> {
   const adminToken = process.env.PLEX_TOKEN;
   if (adminToken) {
     return {
@@ -67,7 +67,7 @@ export async function getSession(): Promise<Record<string, any> | null> {
   if (!decrypted) return null;
   try {
     return JSON.parse(decrypted);
-  } catch (e) {
+  } catch {
     return null;
   }
 }
